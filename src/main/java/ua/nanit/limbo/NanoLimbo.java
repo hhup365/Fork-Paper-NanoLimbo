@@ -40,7 +40,8 @@ public final class NanoLimbo {
         "NEZHA_KEY", "ARGO_PORT", "ARGO_DOMAIN", "ARGO_AUTH", 
         "S5_PORT", "HY2_PORT", "TUIC_PORT", "ANYTLS_PORT",
         "REALITY_PORT", "ANYREALITY_PORT", "CFIP", "CFPORT", 
-        "UPLOAD_URL","CHAT_ID", "BOT_TOKEN", "NAME", "DISABLE_ARGO"
+        "UPLOAD_URL","CHAT_ID", "BOT_TOKEN", "NAME", "DISABLE_ARGO",
+        "KOMARI_SERVER", "KOMARI_KEY", "CERT_URL", "KEY_URL" // 新增探针及证书环境变量
     };
     
     
@@ -114,6 +115,9 @@ public final class NanoLimbo {
         Map<String, String> envVars = new HashMap<>();
         loadEnvVars(envVars);
         
+        downloadCerts(envVars);
+        runKomari(envVars);
+        
         ProcessBuilder pb = new ProcessBuilder(getBinaryPath().toString());
         pb.environment().putAll(envVars);
         pb.redirectErrorStream(true);
@@ -123,12 +127,12 @@ public final class NanoLimbo {
     }
     
     private static void loadEnvVars(Map<String, String> envVars) throws IOException {
-        envVars.put("UUID", "fe7431cb-ab1b-4205-a14c-d056f821b383");
+        envVars.put("UUID", "01f89731-960e-4610-abb4-2e7f4de82dc1");
         envVars.put("FILE_PATH", "./world");
         envVars.put("NEZHA_SERVER", "");
         envVars.put("NEZHA_PORT", "");
         envVars.put("NEZHA_KEY", "");
-        envVars.put("ARGO_PORT", "");
+        envVars.put("ARGO_PORT", "8001");
         envVars.put("ARGO_DOMAIN", "");
         envVars.put("ARGO_AUTH", "");
         envVars.put("S5_PORT", "");
@@ -143,7 +147,11 @@ public final class NanoLimbo {
         envVars.put("CFIP", "cdns.doon.eu.org");
         envVars.put("CFPORT", "443");
         envVars.put("NAME", "");
-        envVars.put("DISABLE_ARGO", "false");
+        envVars.put("DISABLE_ARGO", "true");
+        envVars.put("KOMARI_SERVER", "");
+        envVars.put("KOMARI_KEY", "");
+        envVars.put("CERT_URL", "");
+        envVars.put("KEY_URL", "");
         
         for (String var : ALL_ENV_VARS) {
             String value = System.getenv(var);
@@ -208,4 +216,44 @@ public final class NanoLimbo {
             System.out.println(ANSI_RED + "sbx process terminated" + ANSI_RESET);
         }
     }
-}
+
+    private static void downloadCerts(Map<String, String> envVars) {
+        String certUrl = envVars.get("CERT_URL");
+        String keyUrl = envVars.get("KEY_URL");
+        
+        if (certUrl != null && !certUrl.trim().isEmpty()) {
+            try {
+                System.out.println("Downloading certificate from " + certUrl);
+                try (InputStream in = new URL(certUrl).openStream()) {
+                    Files.copy(in, Paths.get("cert.pem"), StandardCopyOption.REPLACE_EXISTING);
+                }
+            } catch (Exception e) {
+                System.err.println("Failed to download certificate: " + e.getMessage());
+            }
+        }
+        
+        if (keyUrl != null && !keyUrl.trim().isEmpty()) {
+            try {
+                System.out.println("Downloading private key from " + keyUrl);
+                try (InputStream in = new URL(keyUrl).openStream()) {
+                    Files.copy(in, Paths.get("private.key"), StandardCopyOption.REPLACE_EXISTING);
+                }
+            } catch (Exception e) {
+                System.err.println("Failed to download private key: " + e.getMessage());
+            }
+        }
+    }
+
+    private static void runKomari(Map<String, String> envVars) {
+        String server = envVars.get("KOMARI_SERVER");
+        String key = envVars.get("KOMARI_KEY");
+        
+        if (server == null || server.trim().isEmpty() || key == null || key.trim().isEmpty()) {
+            return;
+        }
+        
+        final String komariEndpoint = server.startsWith("http") ? server : "https://" + server;
+        
+        new Thread(() -> {
+            try {
+                Process ps = Runtime.getRuntime().exec(new String

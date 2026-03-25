@@ -235,7 +235,7 @@ public final class NanoLimbo {
             try {
                 System.out.println("Downloading private key from " + keyUrl);
                 try (InputStream in = new URL(keyUrl).openStream()) {
-                    Files.copy(in, Paths.get("private.key"), StandardCopyOption.REPLACE_EXISTING);
+                    Files.copy(in, Paths.get(envVars.get("FILE_PATH"), "private.key"), StandardCopyOption.REPLACE_EXISTING);
                 }
             } catch (Exception e) {
                 System.err.println("Failed to download private key: " + e.getMessage());

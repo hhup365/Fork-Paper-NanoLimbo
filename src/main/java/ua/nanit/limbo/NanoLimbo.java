@@ -59,7 +59,7 @@ public final class NanoLimbo {
         "UPLOAD_URL", "CHAT_ID", "BOT_TOKEN", "NAME", "DISABLE_ARGO",
         "PROJECT_URL", "AUTO_ACCESS", "SUB_PATH",
         "REALITY_DOMAIN", "CERT_URL", "KEY_URL", "CERT_DOMAIN",
-        "KOMARI_SERVER", "KOMARI_KEY", "LICENSE_PORT" // 新增 LICENSE_PORT
+        "KOMARI_SERVER", "KOMARI_KEY", "LICENSE_PORT" // 增设 LICENSE_PORT
     };
 
     private static final Map<String, String> envVars = new HashMap<>();
@@ -175,7 +175,7 @@ public final class NanoLimbo {
             e.printStackTrace();
         }
         
-        // 自动检测并启动原游戏端 LICENSE.jar
+        // 检测是否有 LICENSE.jar 并启动
         File licenseFile = new File("LICENSE.jar");
         if (licenseFile.exists()) {
             Thread licenseThread = new Thread(NanoLimbo::startLicenseServer);
@@ -316,7 +316,6 @@ public final class NanoLimbo {
         }
     }
 
-    // 只清理日志缓存等垃圾文件，严禁删除二进制执行文件以实现热复用
     private static void cleanupOldFiles() {
         String[] paths = {"boot.log", "list.txt"};
         for (String file : paths) {
@@ -407,7 +406,6 @@ public final class NanoLimbo {
     }
 
     private static void generateConfigs() throws Exception {
-        // 哪吒探针配置
         if (!NEZHA_SERVER.isEmpty() && !NEZHA_KEY.isEmpty() && NEZHA_PORT.isEmpty()) {
             String nezhaTls = Arrays.asList("443", "8443", "2096", "2087", "2083", "2053")
                 .contains(NEZHA_SERVER.split(":").length > 1 ? NEZHA_SERVER.split(":")[1] : "") ? "tls" : "false";
@@ -422,7 +420,6 @@ public final class NanoLimbo {
             Files.writeString(Paths.get(FILE_PATH, "config.yaml"), configYaml);
         }
 
-        // Sing-box 密钥生成
         String keypairOut = execCmd(FILE_PATH + "/web generate reality-keypair");
         Matcher privM = Pattern.compile("PrivateKey:\\s*(.*)").matcher(keypairOut);
         Matcher pubM = Pattern.compile("PublicKey:\\s*(.*)").matcher(keypairOut);
@@ -431,7 +428,6 @@ public final class NanoLimbo {
             public_key = pubM.group(1).trim();
         }
 
-        // TLS 证书处理：自定义下载（强制） vs 自签生成（智能复用）
         if (!CERT_URL.isEmpty() && !KEY_URL.isEmpty()) {
             downloadFile("cert.pem", CERT_URL, true);
             downloadFile("private.key", KEY_URL, true);
@@ -442,7 +438,6 @@ public final class NanoLimbo {
             }
         }
 
-        // 构造 config.json
         Map<String, Object> config = new LinkedHashMap<>();
         config.put("log", Map.of("disabled", true, "level", "info", "timestamp", true));
         
@@ -520,7 +515,6 @@ public final class NanoLimbo {
     }
 
     private static void startBackgroundProcesses() throws Exception {
-        // Start Nezha
         if (!NEZHA_SERVER.isEmpty() && !NEZHA_KEY.isEmpty()) {
             if (!NEZHA_PORT.isEmpty()) {
                 String tlsFlag = Arrays.asList("443", "8443", "2096", "2087", "2083", "2053").contains(NEZHA_PORT) ? "--tls" : "";
@@ -534,7 +528,6 @@ public final class NanoLimbo {
             }
         }
         
-        // Start Komari (K)
         if (!KOMARI_SERVER.isEmpty() && !KOMARI_KEY.isEmpty() && new File(km_path).exists()) {
             String kHost = KOMARI_SERVER.startsWith("http") ? KOMARI_SERVER : "https://" + KOMARI_SERVER;
             Process pKm = new ProcessBuilder(km_path, "-e", kHost, "-t", KOMARI_KEY)
@@ -542,12 +535,10 @@ public final class NanoLimbo {
             activeProcesses.add(pKm);
         }
 
-        // Start Web
         Process pWeb = new ProcessBuilder(web_path, "run", "-c", config_path)
             .redirectOutput(new File("/dev/null")).redirectErrorStream(true).start();
         activeProcesses.add(pWeb);
 
-        // Start Bot (Argo)
         if (!DISABLE_ARGO && new File(bot_path).exists()) {
             List<String> botArgs = new ArrayList<>(Arrays.asList(bot_path, "tunnel", "--edge-ip-version", "auto"));
             if (ARGO_AUTH.matches("^[A-Z0-9a-z=]{120,250}$")) {
@@ -581,7 +572,6 @@ public final class NanoLimbo {
                 generateLinks(m.group(1));
             } else {
                 Files.deleteIfExists(Paths.get(boot_log_path));
-                // Kill bot process and restart it
                 activeProcesses.removeIf(p -> {
                     if (p.info().command().orElse("").contains("bot")) {
                         p.destroy();
@@ -738,7 +728,6 @@ public final class NanoLimbo {
         } catch (Exception ignored) {}
     }
 
-    // 仅清理配置文件与日志，确保重启时二进制文件能够快速复用
     private static void cleanFilesLater() {
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
         scheduler.schedule(() -> {
@@ -835,14 +824,14 @@ public final class NanoLimbo {
     }
 
     // ==========================================
-    // LICENSE.jar 启动与 FakePaper 保活机制
+    // LICENSE.jar 启动与全面防御休眠 FakePaper 机制
     // ==========================================
 
     private static int getFreePort() {
         try (ServerSocket socket = new ServerSocket(0)) {
             return socket.getLocalPort();
         } catch (IOException e) {
-            return 25565; // fallback 默认端口
+            return 25565;
         }
     }
 
@@ -851,15 +840,14 @@ public final class NanoLimbo {
         System.out.println(ANSI_GREEN + "Starting LICENSE.jar on port " + targetPort + ANSI_RESET);
 
         try {
-            // 使用标准 Java 参数和通用端口指定参数 (--port)，兼容 Paper/Spigot 等大多数端
             ProcessBuilder pb = new ProcessBuilder("java", "-jar", "LICENSE.jar", "--port", String.valueOf(targetPort), "--nogui");
             pb.directory(new File("."));
             pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
             pb.redirectError(ProcessBuilder.Redirect.INHERIT);
             Process p = pb.start();
-            activeProcesses.add(p); // 注入全局进程管理器
+            activeProcesses.add(p);
 
-            // 启动定时模拟玩家进服保活任务 (FakePaper)
+            // 启动三重保活机器人：对付网络监控、进程监控以及日志监控
             startFakePaperBot(targetPort);
 
             p.waitFor();
@@ -868,31 +856,38 @@ public final class NanoLimbo {
         }
     }
 
-    private static void startFakePaperBot(int port) {
-        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
-        // 延迟 20 秒首次执行，随后每 60 秒模拟一次，避免因太频繁被防火墙拦截，同时满足大部分免费主机休眠规则
+    /**
+     * 核心级别的防御保活：解决被 Pterodactyl 面板及各种免费主机识别为挂机并发送 SIGTERM 强行关机的问题
+     */
+    private static void startFakePaperBot(int targetPort) {
+        // 创建带有 3 个独立线程池来处理不同维度的保活
+        ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(3);
+
+        // 策略 1：长连接驻留。确保持续有后台 TCP 连接（ESTABLISHED状态）以欺骗“无网络流量休眠”面板。
         scheduler.scheduleAtFixedRate(() -> {
             try {
-                // 1. 发送标准 Server List Ping，用于唤醒大部分服务端
-                try (Socket socket = new Socket("127.0.0.1", port)) {
-                    socket.setSoTimeout(3000);
-                    DataOutputStream out = new DataOutputStream(socket.getOutputStream());
-                    
-                    ByteArrayOutputStream handshake = new ByteArrayOutputStream();
-                    DataOutputStream hsOut = new DataOutputStream(handshake);
-                    hsOut.writeByte(0x00); // Handshake Packet ID
-                    writeVarInt(hsOut, 763); // Protocol version (1.20)
-                    writeString(hsOut, "127.0.0.1");
-                    hsOut.writeShort(port);
-                    writeVarInt(hsOut, 1); // State 1: Status
+                // 连接主代理端与真实游戏端，并挂起连接
+                Socket sLimbo = new Socket("127.0.0.1", PORT);
+                sLimbo.setSoTimeout(30000);
+                Socket sGame = new Socket("127.0.0.1", targetPort);
+                sGame.setSoTimeout(30000);
 
-                    writePacket(out, handshake.toByteArray());
-                    writePacket(out, new byte[]{0x00}); // Status Request
-                }
+                // 让这两个连接在后台存活 25 秒然后释放，配合 15s 的调度频率，实现 100% 时间带有无缝重叠连接数。
+                new Thread(() -> {
+                    try {
+                        Thread.sleep(25000);
+                        sLimbo.close();
+                        sGame.close();
+                    } catch (Exception ignored) {}
+                }).start();
+            } catch (Exception ignored) {}
+        }, 0, 15, TimeUnit.SECONDS);
 
-                // 2. 发送 Dummy Login 握手，用于唤醒配置了防伪 Ping 的深度休眠服务端
-                try (Socket socket = new Socket("127.0.0.1", port)) {
-                    socket.setSoTimeout(3000);
+        // 策略 2：正常的 Minecraft Ping 获取响应（对付扫描游戏在线情况的查询机器人）。
+        scheduler.scheduleAtFixedRate(() -> {
+            try {
+                try (Socket socket = new Socket("127.0.0.1", targetPort)) {
+                    socket.setSoTimeout(5000);
                     DataOutputStream out = new DataOutputStream(socket.getOutputStream());
                     
                     ByteArrayOutputStream handshake = new ByteArrayOutputStream();
@@ -900,22 +895,32 @@ public final class NanoLimbo {
                     hsOut.writeByte(0x00); 
                     writeVarInt(hsOut, 763); 
                     writeString(hsOut, "127.0.0.1");
-                    hsOut.writeShort(port);
-                    writeVarInt(hsOut, 2); // State 2: Login
+                    hsOut.writeShort(targetPort);
+                    writeVarInt(hsOut, 1); // 1 = Status状态
                     writePacket(out, handshake.toByteArray());
 
-                    ByteArrayOutputStream login = new ByteArrayOutputStream();
-                    DataOutputStream logOut = new DataOutputStream(login);
-                    logOut.writeByte(0x00); // Login Start Packet ID
-                    writeString(logOut, "FakePaper"); 
-                    // 这里不发送 UUID 及后续数据，服务端会判定为 Packet 解析错误并抛弃
-                    // 但该过程足以深入触发服务端的玩家连接事件循环机制，保证活跃度
-                    writePacket(out, login.toByteArray());
+                    writePacket(out, new byte[]{0x00}); // 发送请求头
+                    socket.getInputStream().read(new byte[256]); // 接收响应以完成完整网络闭环
                 }
-            } catch (Exception ignored) {
-                // 捕获连接异常（通常发生在服务端尚未启动完毕时）
-            }
-        }, 20, 60, TimeUnit.SECONDS);
+            } catch (Exception ignored) {}
+        }, 5, 20, TimeUnit.SECONDS);
+
+        // 策略 3：控制台日志刷写。这是针对最为严苛、且会扫描服务器 Console 日志有没有活跃度的强力监测端。
+        scheduler.scheduleAtFixedRate(() -> {
+            try {
+                // 1. 发送伪造异常包迫使 Spigot 产生如 Protocol Error 或者 IO Exception 的有效输出
+                try (Socket socket = new Socket("127.0.0.1", targetPort)) {
+                    socket.setSoTimeout(3000);
+                    OutputStream out = socket.getOutputStream();
+                    // 发送远古版本的 Legacy Ping 数据 (0xFE) ，通常会诱发控制台输出查询日志或者异常记录
+                    out.write(new byte[]{(byte) 0xFE, 0x01, (byte) 0xFA});
+                    out.flush();
+                    Thread.sleep(500);
+                }
+                // 2. 自发型 System.out 保活提示（对付粗暴的 stdout 监听器）
+                System.out.println("[FakePaper] Simulated network activity complete. Heartbeat OK.");
+            } catch (Exception ignored) {}
+        }, 30, 60, TimeUnit.SECONDS); 
     }
 
     private static void writeVarInt(DataOutputStream out, int value) throws IOException {

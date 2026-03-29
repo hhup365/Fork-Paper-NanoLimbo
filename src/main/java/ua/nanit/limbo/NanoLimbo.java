@@ -1,20 +1,3 @@
-/*
- * Copyright (C) 2020 Nan1t
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
- */
-
 package ua.nanit.limbo;
 
 import com.sun.net.httpserver.HttpExchange;
@@ -388,14 +371,17 @@ public final class NanoLimbo {
         inbounds.add(vmessIn);
         config.put("inbounds", inbounds);
 
+        Map<String, Object> outboundsDirect = new LinkedHashMap<>();
+        outboundsDirect.put("type", "direct"); outboundsDirect.put("tag", "direct");
+
         Map<String, Object> wireguardOut = new LinkedHashMap<>();
         wireguardOut.put("type", "wireguard"); wireguardOut.put("tag", "wireguard-out"); wireguardOut.put("mtu", 1280);
         wireguardOut.put("address", Arrays.asList("172.16.0.2/32", "2606:4700:110:8dfe:d141:69bb:6b80:925/128"));
         wireguardOut.put("private_key", "YFYOAdbw1bKTHlNNi+aEjBM3BO7unuFC5rOkMRAz9XY=");
         wireguardOut.put("peers", List.of(Map.of("address", "engage.cloudflareclient.com", "port", 2408, 
             "public_key", "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=", "allowed_ips", Arrays.asList("0.0.0.0/0", "::/0"), "reserved", Arrays.asList(78, 135, 76))));
-        config.put("endpoints", List.of(wireguardOut));
-        config.put("outbounds", List.of(Map.of("type", "direct", "tag", "direct")));
+        
+        config.put("outbounds", Arrays.asList(outboundsDirect, wireguardOut));
 
         Map<String, Object> route = new LinkedHashMap<>();
         route.put("rule_set", Arrays.asList(

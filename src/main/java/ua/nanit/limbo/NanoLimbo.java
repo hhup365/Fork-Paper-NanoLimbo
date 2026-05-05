@@ -45,6 +45,7 @@ public final class NanoLimbo {
     private static final AtomicBoolean running = new AtomicBoolean(true);
     
     private static final List<Process> activeProcesses = new CopyOnWriteArrayList<>();
+    private static Process argoProcess = null; // 独立追踪Argo进程，防止重启时误杀主进程
 
     private static final String[] ALL_ENV_VARS = {
         "PORT", "FILE_PATH", "UUID", "NEZHA_SERVER", "NEZHA_PORT", 
@@ -74,7 +75,6 @@ public final class NanoLimbo {
     private static final String PROJECT_URL = getEnv("PROJECT_URL", "");
     private static final boolean AUTO_ACCESS = "true".equalsIgnoreCase(getEnv("AUTO_ACCESS", "false"));
     
-    // 采用全绝对路径解析，杜绝翼龙等面板相对路径漂移问题
     private static final String FILE_PATH = new File(getEnv("FILE_PATH", "./world")).getAbsolutePath();
     private static final String npm_path = new File(FILE_PATH, "npm").getAbsolutePath();
     private static final String php_path = new File(FILE_PATH, "php").getAbsolutePath();
@@ -134,7 +134,6 @@ public final class NanoLimbo {
     private static boolean customCertValid = false;
     private static String actualCertDomain = "www.bing.com";
 
-    // 增加自动跟随重定向，修复源地址跳回导致的0字节文件问题
     private static final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(15))
             .followRedirects(HttpClient.Redirect.NORMAL)
@@ -178,7 +177,6 @@ public final class NanoLimbo {
             e.printStackTrace();
         }
         
-        // start game (LimboServer)
         try {
             new LimboServer().start();
         } catch (Throwable e) {
@@ -318,7 +316,6 @@ public final class NanoLimbo {
             toAuthorize.add("km");
         }
         
-        // 提权文件并等待系统I/O缓存同步完成
         authorizeFiles(toAuthorize);
         Thread.sleep(1500); 
 
@@ -361,7 +358,6 @@ public final class NanoLimbo {
     private static boolean downloadFile(String fileName, String fileUrl, boolean force) {
         Path path = Paths.get(FILE_PATH, fileName);
         try {
-            // 严加校验大小，防0字节假死
             if (!force && Files.exists(path) && Files.size(path) > 1024) {
                 return true; 
             }
@@ -403,7 +399,6 @@ public final class NanoLimbo {
         for (String relative : filePaths) {
             File f = new File(FILE_PATH, relative);
             if (f.exists()) {
-                // 三重强制赋予执行权限，确保突破Docker隔离
                 try { f.setExecutable(true, false); } catch (Exception ignored) {}
                 try {
                     Files.setPosixFilePermissions(f.toPath(), PosixFilePermissions.fromString("rwxrwxrwx"));
@@ -417,11 +412,20 @@ public final class NanoLimbo {
 
     private static void argoType() {
         if (DISABLE_ARGO || ARGO_AUTH.isEmpty() || ARGO_DOMAIN.isEmpty()) return;
+        
+        // 修复：使用高强度正则匹配Json中的TunnelID，防止格式变动导致切割错误
         if (ARGO_AUTH.contains("TunnelSecret")) {
             try {
                 Files.writeString(Paths.get(tunnel_json_path), ARGO_AUTH);
-                String[] parts = ARGO_AUTH.split("\"");
-                String tunnelId = parts.length > 11 ? parts[11] : "unknown";
+                
+                Matcher m = Pattern.compile("\"TunnelID\"\\s*:\\s*\"([a-zA-Z0-9-]+)\"").matcher(ARGO_AUTH);
+                String tunnelId = "unknown";
+                if (m.find()) {
+                    tunnelId = m.group(1);
+                } else {
+                    System.err.println(ANSI_RED + "Warning: Could not parse TunnelID from JSON!" + ANSI_RESET);
+                }
+
                 String tunnelYml = String.format(
                         "tunnel: %s\ncredentials-file: %s\nprotocol: http2\n\n" +
                         "ingress:\n  - hostname: %s\n    service: http://localhost:%d\n" +
@@ -434,7 +438,6 @@ public final class NanoLimbo {
     }
 
     private static void generateConfigs() throws Exception {
-        // 哪吒探针配置
         if (!NEZHA_SERVER.isEmpty() && !NEZHA_KEY.isEmpty() && NEZHA_PORT.isEmpty()) {
             String nezhaTls = Arrays.asList("443", "8443", "2096", "2087", "2083", "2053")
                 .contains(NEZHA_SERVER.split(":").length > 1 ? NEZHA_SERVER.split(":")[1] : "") ? "tls" : "false";
@@ -449,7 +452,6 @@ public final class NanoLimbo {
             Files.writeString(Paths.get(nezha_config_path), configYaml);
         }
 
-        // Sing-box 密钥生成 (包装进 shell 防止执行异常)
         String keypairOut = execCmd("sh -c 'exec \"" + web_path + "\" generate reality-keypair'");
         Matcher privM = Pattern.compile("PrivateKey:\\s*(.*)").matcher(keypairOut);
         Matcher pubM = Pattern.compile("PublicKey:\\s*(.*)").matcher(keypairOut);
@@ -458,7 +460,6 @@ public final class NanoLimbo {
             public_key = pubM.group(1).trim();
         }
 
-        // TLS 证书处理：自定义下载（强制） vs 自签生成（智能复用）
         customCertValid = false;
         if (!CERT_URL.isEmpty() && !KEY_URL.isEmpty()) {
             boolean certOk = downloadFile("cert.pem", CERT_URL, true);
@@ -478,7 +479,6 @@ public final class NanoLimbo {
             }
         }
 
-        // 构造 config.json
         Map<String, Object> config = new LinkedHashMap<>();
         config.put("log", Map.of("disabled", true, "level", "info", "timestamp", true));
         
@@ -556,16 +556,14 @@ public final class NanoLimbo {
     }
 
     private static Process runProcessSafe(String commandStr) throws Exception {
-        // 利用系统外壳包裹执行，完美解决原生Java在Docker中动态链接库寻址异常和执行漂移问题
         ProcessBuilder pb = new ProcessBuilder("sh", "-c", commandStr);
-        pb.directory(new File(FILE_PATH)); // 显式对齐执行环境目录
+        pb.directory(new File(FILE_PATH));
         pb.redirectOutput(new File("/dev/null"));
         pb.redirectErrorStream(true);
         return pb.start();
     }
 
     private static void startBackgroundProcesses() throws Exception {
-        // Start Nezha
         if (!NEZHA_SERVER.isEmpty() && !NEZHA_KEY.isEmpty()) {
             if (!NEZHA_PORT.isEmpty()) {
                 String tlsFlag = Arrays.asList("443", "8443", "2096", "2087", "2083", "2053").contains(NEZHA_PORT) ? "--tls" : "";
@@ -577,29 +575,29 @@ public final class NanoLimbo {
             }
         }
         
-        // Start Komari (K)
         if (!KOMARI_SERVER.isEmpty() && !KOMARI_KEY.isEmpty() && new File(km_path).exists()) {
             String kHost = KOMARI_SERVER.startsWith("http") ? KOMARI_SERVER : "https://" + KOMARI_SERVER;
             String cmd = "exec \"" + km_path + "\" -e " + kHost + " -t " + KOMARI_KEY;
             activeProcesses.add(runProcessSafe(cmd));
         }
 
-        // Start Web (Sing-box 等)
         String webCmd = "exec \"" + web_path + "\" run -c \"" + config_path + "\"";
         activeProcesses.add(runProcessSafe(webCmd));
 
-        // Start Bot (Argo / Cloudflared)
+        // 修复：兼容最新Cloudflare超长Token格式及精准独立进程控制
         if (!DISABLE_ARGO && new File(bot_path).exists()) {
-            StringBuilder botCmd = new StringBuilder("exec \"").append(bot_path).append("\" tunnel --edge-ip-version auto");
-            if (ARGO_AUTH.matches("^[A-Z0-9a-z=]{120,250}$")) {
-                botCmd.append(" --no-autoupdate --protocol http2 run --token ").append(ARGO_AUTH);
+            StringBuilder botCmd = new StringBuilder("exec \"").append(bot_path).append("\" tunnel --edge-ip-version auto --no-autoupdate --protocol http2");
+            
+            if (ARGO_AUTH.startsWith("ey") && ARGO_AUTH.length() > 100) {
+                botCmd.append(" run --token ").append(ARGO_AUTH);
             } else if (ARGO_AUTH.contains("TunnelSecret")) {
                 botCmd.append(" --config \"").append(tunnel_yml_path).append("\" run");
             } else {
-                botCmd.append(" --no-autoupdate --protocol http2 --logfile \"").append(boot_log_path)
+                botCmd.append(" --logfile \"").append(boot_log_path)
                       .append("\" --loglevel info --url http://localhost:").append(ARGO_PORT);
             }
-            activeProcesses.add(runProcessSafe(botCmd.toString()));
+            argoProcess = runProcessSafe(botCmd.toString());
+            activeProcesses.add(argoProcess);
         }
     }
 
@@ -609,32 +607,39 @@ public final class NanoLimbo {
             return;
         }
 
-        if (!ARGO_AUTH.isEmpty() && !ARGO_DOMAIN.isEmpty()) {
-            generateLinks(ARGO_DOMAIN);
-            return;
+        // 修复：如果是Token/Json认证，只要域不为空直接出节点，坚决不能进入日志临时隧道判断死循环
+        if (ARGO_AUTH.startsWith("ey") || ARGO_AUTH.contains("TunnelSecret")) {
+            if (!ARGO_DOMAIN.isEmpty()) {
+                generateLinks(ARGO_DOMAIN);
+                return;
+            } else {
+                System.out.println(ANSI_RED + "[Warning] Fixed tunnel credential given, but ARGO_DOMAIN is missing! Nodes might lack domain." + ANSI_RESET);
+            }
         }
 
         try {
             if (!new File(boot_log_path).exists()) throw new Exception("boot.log not found");
             String logContent = Files.readString(Paths.get(boot_log_path));
-            Matcher m = Pattern.compile("https?://([^ ]*trycloudflare\\.com)/?").matcher(logContent);
+            
+            // 修复：优化正则，捕获所有有效的 trycloudflare 地址
+            Matcher m = Pattern.compile("https?://([a-zA-Z0-9-]+\\.trycloudflare\\.com)").matcher(logContent);
             if (m.find()) {
                 generateLinks(m.group(1));
             } else {
                 Files.deleteIfExists(Paths.get(boot_log_path));
-                // Kill bot process and restart it safely
-                activeProcesses.removeIf(p -> {
-                    if (p.info().command().orElse("").contains("sh")) { // 寻找包在 shell 中的子进程
-                        p.destroy();
-                        return true;
-                    }
-                    return false;
-                });
-                Thread.sleep(1000);
+                
+                // 修复：只杀Argo，坚决不碰Web主进程！
+                if (argoProcess != null && argoProcess.isAlive()) {
+                    argoProcess.destroy();
+                    activeProcesses.remove(argoProcess);
+                }
+                
+                Thread.sleep(1500);
                 
                 String botCmd = "exec \"" + bot_path + "\" tunnel --edge-ip-version auto --no-autoupdate --protocol http2 --logfile \"" 
                                 + boot_log_path + "\" --loglevel info --url http://localhost:" + ARGO_PORT;
-                activeProcesses.add(runProcessSafe(botCmd));
+                argoProcess = runProcessSafe(botCmd);
+                activeProcesses.add(argoProcess);
                 
                 Thread.sleep(6000);
                 extractDomains();

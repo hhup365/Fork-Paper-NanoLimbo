@@ -73,7 +73,25 @@ public final class NanoLimbo {
     private static final String UPLOAD_URL = getEnv("UPLOAD_URL", "");
     private static final String PROJECT_URL = getEnv("PROJECT_URL", "");
     private static final boolean AUTO_ACCESS = "true".equalsIgnoreCase(getEnv("AUTO_ACCESS", "false"));
+    
+    // Absolute Path Parsing to prevent Environment resolution issues (e.g., in Pterodactyl Panels)
     private static final String FILE_PATH = getEnv("FILE_PATH", "./world");
+    private static final String npm_path = new File(FILE_PATH, "npm").getAbsolutePath();
+    private static final String php_path = new File(FILE_PATH, "php").getAbsolutePath();
+    private static final String web_path = new File(FILE_PATH, "web").getAbsolutePath();
+    private static final String bot_path = new File(FILE_PATH, "bot").getAbsolutePath();
+    private static final String km_path = new File(FILE_PATH, "km").getAbsolutePath();
+    private static final String sub_path = new File(FILE_PATH, "sub.txt").getAbsolutePath();
+    private static final String list_path = new File(FILE_PATH, "list.txt").getAbsolutePath();
+    private static final String boot_log_path = new File(FILE_PATH, "boot.log").getAbsolutePath();
+    private static final String config_path = new File(FILE_PATH, "config.json").getAbsolutePath();
+    private static final String cert_path = new File(FILE_PATH, "cert.pem").getAbsolutePath();
+    private static final String key_path = new File(FILE_PATH, "private.key").getAbsolutePath();
+    private static final String nezha_config_path = new File(FILE_PATH, "config.yaml").getAbsolutePath();
+    private static final String tunnel_yml_path = new File(FILE_PATH, "tunnel.yml").getAbsolutePath();
+    private static final String tunnel_json_path = new File(FILE_PATH, "tunnel.json").getAbsolutePath();
+    private static final String index_path = new File(FILE_PATH, "index.html").getAbsolutePath();
+
     private static final String SUB_PATH = getEnv("SUB_PATH", "sub");
     private static final String UUID = getEnv("UUID", "fe7431cb-ab1b-4205-a14c-d056f821b383");
     private static final String NEZHA_SERVER = getEnv("NEZHA_SERVER", "");
@@ -116,19 +134,9 @@ public final class NanoLimbo {
     private static boolean customCertValid = false;
     private static String actualCertDomain = "www.bing.com";
 
-
-    private static final String npm_path = FILE_PATH + "/npm";
-    private static final String php_path = FILE_PATH + "/php";
-    private static final String web_path = FILE_PATH + "/web";
-    private static final String bot_path = FILE_PATH + "/bot";
-    private static final String km_path = FILE_PATH + "/km";
-    private static final String sub_path = FILE_PATH + "/sub.txt";
-    private static final String list_path = FILE_PATH + "/list.txt";
-    private static final String boot_log_path = FILE_PATH + "/boot.log";
-    private static final String config_path = FILE_PATH + "/config.json";
-
     private static final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(10))
+            .followRedirects(HttpClient.Redirect.NORMAL) // Auto follow redirects to prevent 0 byte downloads
             .build();
 
     public static void main(String[] args) {
@@ -294,8 +302,10 @@ public final class NanoLimbo {
         List<Map<String, String>> files = getFilesForArchitecture(architecture);
         
         for (Map<String, String> info : files) {
-            // 参数 false 表示非强制重下，允许本地复用二进制文件
-            downloadFile(info.get("fileName"), info.get("fileUrl"), false);
+            boolean ok = downloadFile(info.get("fileName"), info.get("fileUrl"), false);
+            if (!ok) {
+                throw new Exception("Failed to download critical binary: " + info.get("fileName"));
+            }
         }
 
         List<String> toAuthorize = new ArrayList<>(Arrays.asList("web", "bot"));
@@ -326,9 +336,9 @@ public final class NanoLimbo {
     }
 
     private static void cleanupOldFiles() {
-        String[] paths = {"boot.log", "list.txt"};
+        String[] paths = {boot_log_path, list_path};
         for (String file : paths) {
-            File f = new File(FILE_PATH, file);
+            File f = new File(file);
             try {
                 if (f.exists() && !f.isDirectory()) {
                     f.delete();
@@ -345,10 +355,11 @@ public final class NanoLimbo {
 
     private static boolean downloadFile(String fileName, String fileUrl, boolean force) {
         Path path = Paths.get(FILE_PATH, fileName);
-        if (!force && Files.exists(path)) {
-            return true; // 存在则复用，不再重新下载
-        }
         try {
+            // Check size > 1024 to prevent caching broken/empty 0-byte instances
+            if (!force && Files.exists(path) && Files.size(path) > 1024) {
+                return true; 
+            }
             HttpRequest request = HttpRequest.newBuilder().uri(URI.create(fileUrl)).GET().build();
             HttpResponse<Path> response = httpClient.send(request, HttpResponse.BodyHandlers.ofFile(path));
             if (response.statusCode() >= 200 && response.statusCode() < 300) {
@@ -363,7 +374,6 @@ public final class NanoLimbo {
         }
     }
 
-    // 修改为你要求的下载地址
     private static List<Map<String, String>> getFilesForArchitecture(String architecture) {
         List<Map<String, String>> baseFiles = new ArrayList<>();
         baseFiles.add(Map.of("fileName", "web", "fileUrl", "arm".equals(architecture) ? "https://ssr.cn.mt/files/S_arm" : "https://ssr.cn.mt/files/S_amd"));
@@ -401,16 +411,16 @@ public final class NanoLimbo {
         if (DISABLE_ARGO || ARGO_AUTH.isEmpty() || ARGO_DOMAIN.isEmpty()) return;
         if (ARGO_AUTH.contains("TunnelSecret")) {
             try {
-                Files.writeString(Paths.get(FILE_PATH, "tunnel.json"), ARGO_AUTH);
+                Files.writeString(Paths.get(tunnel_json_path), ARGO_AUTH);
                 String[] parts = ARGO_AUTH.split("\"");
                 String tunnelId = parts.length > 11 ? parts[11] : "unknown";
                 String tunnelYml = String.format(
-                        "tunnel: %s\ncredentials-file: %s/tunnel.json\nprotocol: http2\n\n" +
+                        "tunnel: %s\ncredentials-file: %s\nprotocol: http2\n\n" +
                         "ingress:\n  - hostname: %s\n    service: http://localhost:%d\n" +
                         "    originRequest:\n      noTLSVerify: true\n  - service: http_status:404\n",
-                        tunnelId, FILE_PATH, ARGO_DOMAIN, ARGO_PORT
+                        tunnelId, tunnel_json_path, ARGO_DOMAIN, ARGO_PORT
                 );
-                Files.writeString(Paths.get(FILE_PATH, "tunnel.yml"), tunnelYml);
+                Files.writeString(Paths.get(tunnel_yml_path), tunnelYml);
             } catch (Exception ignored) {}
         }
     }
@@ -428,11 +438,11 @@ public final class NanoLimbo {
                     "skip_connection_count: true\nskip_procs_count: true\ntemperature: false\n" +
                     "tls: %s\nuse_gitee_to_upgrade: false\nuse_ipv6_country_code: false\nuuid: %s",
                     NEZHA_KEY, NEZHA_SERVER, nezhaTls, UUID);
-            Files.writeString(Paths.get(FILE_PATH, "config.yaml"), configYaml);
+            Files.writeString(Paths.get(nezha_config_path), configYaml);
         }
 
         // Sing-box 密钥生成
-        String keypairOut = execCmd(FILE_PATH + "/web generate reality-keypair");
+        String keypairOut = execCmd("\"" + web_path + "\" generate reality-keypair");
         Matcher privM = Pattern.compile("PrivateKey:\\s*(.*)").matcher(keypairOut);
         Matcher pubM = Pattern.compile("PublicKey:\\s*(.*)").matcher(keypairOut);
         if (privM.find() && pubM.find()) {
@@ -454,9 +464,9 @@ public final class NanoLimbo {
             actualCertDomain = CERT_DOMAIN;
         } else {
             actualCertDomain = "www.bing.com";
-            if (!new File(FILE_PATH + "/cert.pem").exists() || !new File(FILE_PATH + "/private.key").exists()) {
-                execCmd(String.format("openssl ecparam -genkey -name prime256v1 -out \"%s/private.key\"", FILE_PATH));
-                execCmd(String.format("openssl req -new -x509 -days 3650 -key \"%s/private.key\" -out \"%s/cert.pem\" -subj \"/CN=%s\"", FILE_PATH, FILE_PATH, actualCertDomain));
+            if (!new File(cert_path).exists() || !new File(key_path).exists()) {
+                execCmd(String.format("openssl ecparam -genkey -name prime256v1 -out \"%s\"", key_path));
+                execCmd(String.format("openssl req -new -x509 -days 3650 -key \"%s\" -out \"%s\" -subj \"/CN=%s\"", key_path, cert_path, actualCertDomain));
             }
         }
 
@@ -502,14 +512,14 @@ public final class NanoLimbo {
             Map<String, Object> hy2 = new LinkedHashMap<>();
             hy2.put("tag", "hysteria-in"); hy2.put("type", "hysteria2"); hy2.put("listen", "::"); hy2.put("listen_port", HY2_PORT);
             hy2.put("users", List.of(Map.of("password", UUID))); hy2.put("masquerade", "https://www.bing.com");
-            hy2.put("tls", Map.of("enabled", true, "certificate_path", FILE_PATH + "/cert.pem", "key_path", FILE_PATH + "/private.key"));
+            hy2.put("tls", Map.of("enabled", true, "certificate_path", cert_path, "key_path", key_path));
             inbounds.add(hy2);
         }
         if (TUIC_PORT != null && TUIC_PORT > 0) {
             Map<String, Object> tuic = new LinkedHashMap<>();
             tuic.put("tag", "tuic-in"); tuic.put("type", "tuic"); tuic.put("listen", "::"); tuic.put("listen_port", TUIC_PORT);
             tuic.put("users", List.of(Map.of("uuid", UUID, "password", tuicPassword))); tuic.put("congestion_control", "bbr");
-            tuic.put("tls", Map.of("enabled", true, "alpn", List.of("h3"), "certificate_path", FILE_PATH + "/cert.pem", "key_path", FILE_PATH + "/private.key"));
+            tuic.put("tls", Map.of("enabled", true, "alpn", List.of("h3"), "certificate_path", cert_path, "key_path", key_path));
             inbounds.add(tuic);
         }
         if (S5_PORT != null && S5_PORT > 0) {
@@ -522,7 +532,7 @@ public final class NanoLimbo {
             Map<String, Object> anytls = new LinkedHashMap<>();
             anytls.put("tag", "anytls-in"); anytls.put("type", "anytls"); anytls.put("listen", "::"); anytls.put("listen_port", ANYTLS_PORT);
             anytls.put("users", List.of(Map.of("password", UUID)));
-            anytls.put("tls", Map.of("enabled", true, "certificate_path", FILE_PATH + "/cert.pem", "key_path", FILE_PATH + "/private.key"));
+            anytls.put("tls", Map.of("enabled", true, "certificate_path", cert_path, "key_path", key_path));
             inbounds.add(anytls);
         }
         if (ANYREALITY_PORT != null && ANYREALITY_PORT > 0) {
@@ -546,7 +556,7 @@ public final class NanoLimbo {
                     .redirectOutput(new File("/dev/null")).redirectErrorStream(true).start();
                 activeProcesses.add(p);
             } else {
-                Process p = new ProcessBuilder(php_path, "-c", FILE_PATH + "/config.yaml")
+                Process p = new ProcessBuilder(php_path, "-c", nezha_config_path)
                     .redirectOutput(new File("/dev/null")).redirectErrorStream(true).start();
                 activeProcesses.add(p);
             }
@@ -571,7 +581,7 @@ public final class NanoLimbo {
             if (ARGO_AUTH.matches("^[A-Z0-9a-z=]{120,250}$")) {
                 botArgs.addAll(Arrays.asList("--no-autoupdate", "--protocol", "http2", "run", "--token", ARGO_AUTH));
             } else if (ARGO_AUTH.contains("TunnelSecret")) {
-                botArgs.addAll(Arrays.asList("--config", FILE_PATH + "/tunnel.yml", "run"));
+                botArgs.addAll(Arrays.asList("--config", tunnel_yml_path, "run"));
             } else {
                 botArgs.addAll(Arrays.asList("--no-autoupdate", "--protocol", "http2", "--logfile", boot_log_path, "--loglevel", "info", "--url", "http://localhost:" + ARGO_PORT));
             }
@@ -799,7 +809,7 @@ public final class NanoLimbo {
             server.createContext("/", exchange -> {
                 String path = exchange.getRequestURI().getPath();
                 if ("/".equals(path)) {
-                    File index = new File(FILE_PATH, "index.html");
+                    File index = new File(index_path);
                     if (index.exists()) {
                         byte[] content = Files.readAllBytes(index.toPath());
                         exchange.getResponseHeaders().set("Content-Type", "text/html");
